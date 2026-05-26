@@ -36,7 +36,7 @@
     <div id="root" class="h-full"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
 
         // Hook customizado para gerenciar o LocalStorage
         function useLocalStorage(key, initialValue) {
@@ -97,6 +97,11 @@
             const [activeFilterTags, setActiveFilterTags] = useState([]);
             const [isFilterPanelOpen, setFilterPanelOpen] = useState(false);
             const [editingTag, setEditingTag] = useState({ id: null, name: '' });
+
+            // Estado para seleção em massa
+            const [selection, setSelection] = useState({ active: false, ids: [] });
+            const longPressTimer = useRef(null);
+
 
             // Estado para anexos de despesas
             const [expenseImage, setExpenseImage] = useState({}); // { [cardId]: base64_string }
@@ -340,6 +345,60 @@
                 setEditModal({ isOpen: false, item: null, type: null });
             };
 
+            const handleBulkMove = () => {
+                const targetCardId = document.getElementById('bulk-card-select').value;
+                if (!targetCardId) {
+                    alert('Por favor, selecione um cartão de destino.');
+                    return;
+                }
+
+                setExpenses(prevExpenses => 
+                    prevExpenses.map(exp => 
+                        selection.ids.includes(exp.id) ? { ...exp, cardId: targetCardId } : exp
+                    )
+                );
+                setSelection({ active: false, ids: [] });
+            };
+
+            const handlePointerDown = (expenseId) => {
+                longPressTimer.current = setTimeout(() => {
+                    setSelection(prev => {
+                        const newIds = new Set(prev.ids);
+                        newIds.add(expenseId);
+                        return { active: true, ids: Array.from(newIds) };
+                    });
+                    longPressTimer.current = null;
+                }, 2000);
+            };
+
+            const handlePointerUp = (expenseId) => {
+                if (longPressTimer.current) {
+                    clearTimeout(longPressTimer.current);
+                    longPressTimer.current = null;
+                    if (selection.active) {
+                        setSelection(prev => {
+                            const newIds = new Set(prev.ids);
+                            if (newIds.has(expenseId)) {
+                                newIds.delete(expenseId);
+                            } else {
+                                newIds.add(expenseId);
+                            }
+                            return {
+                                active: newIds.size > 0,
+                                ids: Array.from(newIds)
+                            };
+                        });
+                    }
+                }
+            };
+
+            const handlePointerLeave = () => {
+                if (longPressTimer.current) {
+                    clearTimeout(longPressTimer.current);
+                    longPressTimer.current = null;
+                }
+            };
+
             // Lógica do Simulador
             const simCalculatedCardPoints = sim.price * sim.pointsPerReal;
             const simCashPrice = sim.price * (1 - sim.discountPercent / 100);
@@ -412,6 +471,12 @@
                                     <div>
                                         <label className="block text-xs font-semibold text-gray-500 uppercase">Nº de Parcelas</label>
                                         <input name="installments" type="number" min="1" value={formData.installments} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Cartão</label>
+                                        <select name="cardId" value={formData.cardId} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm mt-1">
+                                            {cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                        </select>
                                     </div>
                                     <div>
                                         <label className="block text-xs font-semibold text-gray-500 uppercase">Tags</label>
@@ -816,7 +881,14 @@
                                                                         </summary>
                                                                         <div className="p-3 border-t space-y-2 bg-white">
                                                                             {invoiceData.items.sort((a,b) => a.title.localeCompare(b.title)).map(item => (
-                                                                                <div key={`${item.id}-${item.installmentNumber}`} className="flex justify-between items-center text-sm border-l-4 border-blue-400 pl-3 py-1">
+                                                                                <div 
+                                                                                    key={`${item.id}-${item.installmentNumber}`} 
+                                                                                    className={`flex justify-between items-center text-sm border-l-4 pl-3 py-1 transition-colors ${selection.ids.includes(item.id) ? 'bg-blue-100 border-blue-500' : 'border-blue-400'}`}
+                                                                                    onPointerDown={() => handlePointerDown(item.id)}
+                                                                                    onPointerUp={() => handlePointerUp(item.id)}
+                                                                                    onPointerLeave={handlePointerLeave}
+                                                                                    style={{ touchAction: 'pan-y' }}
+                                                                                >
                                                                                     <div>
                                                                                         <div className="font-medium text-gray-800">{item.title}</div>
                                                                                         {item.tags && item.tags.length > 0 && (
@@ -1095,6 +1167,22 @@
                             </div>
                         )}
                     </main>
+
+                    {selection.active && (
+                        <div className="bg-white p-4 shadow-[0_-5px_15px_rgba(0,0,0,0.1)] z-10 animate-fade-in border-t">
+                            <div className="flex justify-between items-center mb-3">
+                                <span className="font-bold text-sm text-gray-700">{selection.ids.length} compra(s) selecionada(s)</span>
+                                <button onClick={() => setSelection({ active: false, ids: [] })} className="text-sm font-semibold text-red-600">Cancelar</button>
+                            </div>
+                            <div className="flex gap-2">
+                                <select id="bulk-card-select" className="flex-1 border p-2 rounded-lg bg-gray-50 text-sm">
+                                    <option value="">Mover para o cartão...</option>
+                                    {cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                                <button onClick={handleBulkMove} className="bg-blue-600 text-white px-4 rounded-lg font-bold shadow-sm">Mover</button>
+                            </div>
+                        </div>
+                    )}
 
                     <nav className="bg-white border-t border-gray-200 flex justify-around shadow-[0_-5px_15px_rgba(0,0,0,0.05)] w-full pb-safe">
                         <NavItem id="resumo" icon="fa-chart-pie" label="Resumo" />
