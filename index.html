@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Controle Financeiro Local</title>
+    <!-- Tailwind CSS para Estilização -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome para Ícones -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel para compilar JSX no navegador -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 1rem); }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        details[open] > summary .fa-chevron-down { transform: rotate(180deg); }
+        summary .fa-chevron-down { transition: transform 0.2s ease-in-out; }
+    </style>
+</head>
+<body class="bg-gray-200 font-sans antialiased text-gray-900 overflow-hidden h-screen">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Hook customizado para gerenciar o LocalStorage
+        function useLocalStorage(key, initialValue) {
+            const [storedValue, setStoredValue] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(key);
+                    return item ? JSON.parse(item) : initialValue;
+                } catch (error) {
+                    return initialValue;
+                }
+            });
+
+            const setValue = (value) => {
+                try {
+                    const valueToStore = value instanceof Function ? value(storedValue) : value;
+                    setStoredValue(valueToStore);
+                    window.localStorage.setItem(key, JSON.stringify(valueToStore));
+                } catch (error) {
+                    console.error("Erro ao salvar no LocalStorage", error);
+                }
+            };
+            return [storedValue, setValue];
+        }
+
+        const generateId = () => Math.random().toString(36).substring(2, 9);
+        const formatCurrency = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+
+        function App() {
+            // Navegação
+            const [activeTab, setActiveTab] = useState('resumo');
+
+            // Estado do Modal de Edição
+            const [editModal, setEditModal] = useState({ isOpen: false, item: null, type: null });
+            
+            // Estados Persistidos
+            const [salary, setSalary] = useLocalStorage('salary', 5000);
+            const [spendPercent, setSpendPercent] = useLocalStorage('spendPercent', 50);
+            
+            const [cards, setCards] = useLocalStorage('cards', []);
+            const [expenses, setExpenses] = useLocalStorage('expenses', []);
+            const [subscriptions, setSubscriptions] = useLocalStorage('subscriptions', []);
+            const [recurring, setRecurring] = useLocalStorage('recurring', []);
+
+            const [tags, setTags] = useLocalStorage('tags', []);
+            const [activeFilterTags, setActiveFilterTags] = useState([]);
+            const [isFilterPanelOpen, setFilterPanelOpen] = useState(false);
+            const [editingTag, setEditingTag] = useState({ id: null, name: '' });
+
+            // Estado para anexos de despesas
+            const [expenseImage, setExpenseImage] = useState({}); // { [cardId]: base64_string }
+
+            // Estado do Simulador
+            const [sim, setSim] = useState({ price: 1500, discountPercent: 10, pointsPerReal: 2.2, cardPointValue: 0.03, hasAltPlatform: false, altPoints: 50, altPointValue: 0.02, investType: 'CDI', investAmount: 10000, investYieldRate: 0.8 });
+
+            // Estado para novos itens
+            const [newRecurringData, setNewRecurringData] = useState({ title: '', description: '', recurrence: 'Mensal', value: '', date: todayISO });
+
+            const handleNewRecurringChange = (e) => {
+                const { name, value } = e.target;
+                setNewRecurringData(prev => ({ ...prev, [name]: value }));
+            };
+
+            const todayISO = new Date().toISOString().split('T')[0];
+
+            // Cálculos Principais
+            const baseLimit = salary * (spendPercent / 100);
+            const totalSubscriptions = subscriptions.reduce((acc, sub) => acc + Number(sub.value), 0);
+            const totalRecurring = recurring.reduce((acc, rec) => {
+                const value = Number(rec.value) || 0;
+                if (value === 0) return acc;
+
+                const today = new Date();
+                const year = today.getFullYear();
+                const month = today.getMonth();
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+                switch (rec.recurrence) {
+                    case 'Anual':
+                        return acc + (value / 12);
+                    case 'Semanal':
+                        return acc + (value * (daysInMonth / 7));
+                    case 'Quinzenal':
+                        if (!rec.date) return acc;
+                        let occurrences = 0;
+                        let currentDate = new Date(rec.date + 'T00:00:00');
+                        while (currentDate.getFullYear() < year || (currentDate.getFullYear() === year && currentDate.getMonth() < month)) {
+                            currentDate.setDate(currentDate.getDate() + 14);
+                        }
+                        while (currentDate.getFullYear() === year && currentDate.getMonth() === month) {
+                            occurrences++;
+                            currentDate.setDate(currentDate.getDate() + 14);
+                        }
+                        return acc + (value * occurrences);
+                    case 'Mensal':
+                    default:
+                        return acc + value;
+                }
+            }, 0);
+            
+            const getCardInvoice = (cardId) => {
+                const cardExpenses = expenses.filter(e => e.cardId === cardId);
+                const card = cards.find(c => c.id === cardId);
+                if (!card) return 0;
+
+                const today = new Date();
+                const closingDay = Number(card.closingDay);
+
+                const currentInvoiceDate = new Date(today);
+                if (today.getDate() > closingDay) {
+                    currentInvoiceDate.setMonth(currentInvoiceDate.getMonth() + 1);
+                }
+                const invoiceYear = currentInvoiceDate.getFullYear();
+                const invoiceMonth = currentInvoiceDate.getMonth();
+
+                let invoiceTotal = 0;
+
+                expenses.filter(e => e.cardId === cardId).forEach(exp => {
+                    if (!exp.date) return; 
+
+                    const purchaseDate = new Date(exp.date + 'T00:00:00');
+                    const installments = Number(exp.installments);
+                    const monthlyValue = Number(exp.value) / installments;
+
+                    const firstInvoiceStartDate = new Date(purchaseDate);
+                    if (purchaseDate.getDate() >= closingDay) {
+                        firstInvoiceStartDate.setMonth(firstInvoiceStartDate.getMonth() + 1);
+                    }
+
+                    for (let i = 0; i < installments; i++) {
+                        const installmentDate = new Date(firstInvoiceStartDate);
+                        installmentDate.setMonth(firstInvoiceStartDate.getMonth() + i);
+
+                        if (installmentDate.getFullYear() === invoiceYear && installmentDate.getMonth() === invoiceMonth) {
+                            invoiceTotal += monthlyValue;
+                            break;
+                        }
+                    }
+                });
+
+                const subsTotal = subscriptions.filter(s => s.cardId === cardId).reduce((acc, sub) => acc + Number(sub.value), 0);
+                return invoiceTotal + subsTotal;
+            };
+
+            const totalInvoices = cards.reduce((acc, card) => acc + getCardInvoice(card.id), 0);
+            const availableLimit = baseLimit - totalRecurring - totalInvoices;
+
+            const futureInstallmentsValue = expenses
+                .filter(e => e.installments > 1)
+                .reduce((acc, e) => acc + (Number(e.value) / Number(e.installments)), 0);
+            const futureImpactPercent = baseLimit > 0 ? ((futureInstallmentsValue / baseLimit) * 100).toFixed(1) : 0;
+
+            // Handlers (Adicionar/Remover)
+            const addCard = (e) => {
+                e.preventDefault();
+                if(e.target.name.value && e.target.closingDay.value) {
+                    setCards([...cards, { id: generateId(), name: e.target.name.value, closingDay: e.target.closingDay.value }]);
+                    e.target.reset();
+                }
+            };
+
+            const addExpense = (e, cardId) => {
+                e.preventDefault();
+                const { title, value, installments, date, description } = e.target.elements;
+                const image = expenseImage[cardId];
+                const selectedTags = Array.from(e.target.elements)
+                    .filter(el => el.name === 'tags' && el.checked)
+                    .map(el => el.value);
+
+                if(title.value && value.value && date.value) {
+                    setExpenses([...expenses, { 
+                        id: generateId(), 
+                        cardId, 
+                        title: title.value, 
+                        value: parseFloat(value.value), 
+                        installments: parseInt(installments.value) || 1,
+                        date: date.value,
+                        description: image || (description && description.value) || null,
+                        tags: selectedTags
+                    }]);
+                    e.target.reset();
+                    setExpenseImage(prev => {
+                        const newImages = {...prev};
+                        delete newImages[cardId];
+                        return newImages;
+                    });
+                }
+            };
+
+            const addSubscription = (e) => {
+                e.preventDefault();
+                const { name, desc, cardId, value } = e.target;
+                if(name.value && cardId.value && value.value) {
+                    setSubscriptions([...subscriptions, { id: generateId(), name: name.value, description: desc.value, cardId: cardId.value, value: parseFloat(value.value) }]);
+                    e.target.reset();
+                }
+            };
+
+            const addRecurring = (e) => {
+                e.preventDefault();
+                const { title, description, recurrence, value, date } = newRecurringData;
+                if(title.value && value.value) {
+                    const newItem = { 
+                        id: generateId(), 
+                        title: title, 
+                        description: description, 
+                        recurrence: recurrence, 
+                        value: parseFloat(value) 
+                    };
+                    if (recurrence === 'Quinzenal') {
+                        newItem.date = date;
+                    }
+                    setRecurring([...recurring, newItem]);
+                    setNewRecurringData({ title: '', description: '', recurrence: 'Mensal', value: '', date: todayISO });
+                }
+            };
+
+            const addTag = (e) => {
+                e.preventDefault();
+                const name = e.target.name.value.trim();
+                if (name && !tags.some(t => t.name.toLowerCase() === name.toLowerCase())) {
+                    setTags([...tags, { id: generateId(), name }]);
+                    e.target.reset();
+                }
+            };
+
+            const handleUpdateTag = () => {
+                const newName = editingTag.name.trim();
+                if (newName && !tags.some(t => t.id !== editingTag.id && t.name.toLowerCase() === newName.toLowerCase())) {
+                    setTags(tags.map(t => t.id === editingTag.id ? { ...t, name: newName } : t));
+                }
+                setEditingTag({ id: null, name: '' }); // Always reset
+            };
+
+            const removeTag = (tagId) => {
+                setTags(tags.filter(t => t.id !== tagId));
+                setExpenses(prevExpenses => 
+                    prevExpenses.map(exp => ({
+                        ...exp,
+                        tags: exp.tags ? exp.tags.filter(tId => tId !== tagId) : []
+                    }))
+                );
+            };
+
+            const removeItem = (setter, items, id) => setter(items.filter(i => i.id !== id));
+            const removeCardAndDeps = (id) => {
+                setCards(cards.filter(c => c.id !== id));
+                setExpenses(expenses.filter(e => e.cardId !== id));
+                setSubscriptions(subscriptions.filter(s => s.cardId !== id));
+            };
+
+            const handleSimChange = (e) => {
+                const { name, value, type, checked } = e.target;
+                setSim({ ...sim, [name]: type === 'checkbox' ? checked : (name === 'investType' ? value : Number(value)) });
+            };
+
+            const handleExpenseFile = (e, cardId) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        setExpenseImage(prev => ({ ...prev, [cardId]: reader.result }));
+                    };
+                    reader.readAsDataURL(file);
+                } else {
+                    const newImages = {...expenseImage};
+                    delete newImages[cardId];
+                    setExpenseImage(newImages);
+                }
+            };
+
+            const handleUpdateItem = (updatedItem) => {
+                const type = editModal.type;
+                let setter, items;
+
+                if (type === 'expense') { [setter, items] = [setExpenses, expenses]; }
+                else if (type === 'subscription') { [setter, items] = [setSubscriptions, subscriptions]; }
+                else if (type === 'recurring') { [setter, items] = [setRecurring, recurring]; }
+
+                if (type === 'recurring' && updatedItem.recurrence !== 'Quinzenal') {
+                    delete updatedItem.date;
+                }
+                if (setter && items) {
+                    // Ensure numeric values are numbers
+                    if (updatedItem.value) updatedItem.value = parseFloat(updatedItem.value) || 0;
+                    if (updatedItem.installments) updatedItem.installments = parseInt(updatedItem.installments) || 1;
+                    setter(items.map(i => (i.id === updatedItem.id ? updatedItem : i)));
+                }
+                setEditModal({ isOpen: false, item: null, type: null });
+            };
+
+            // Lógica do Simulador
+            const simCalculatedCardPoints = sim.price * sim.pointsPerReal;
+            const simCashPrice = sim.price * (1 - sim.discountPercent / 100);
+            const simLostYield = simCashPrice * (sim.investYieldRate / 100); 
+            const simCostCash = simCashPrice + simLostYield; // Custo efetivo inclui o rendimento perdido ao sacar o dinheiro
+
+            const simTotalAltPoints = sim.hasAltPlatform ? (sim.altPoints * sim.altPointValue) : 0;
+            const simCostCard = sim.price - (simCalculatedCardPoints * sim.cardPointValue) - simTotalAltPoints;
+
+            const simBestOption = simCostCard < simCostCash ? 'Cartão de Crédito' : 'À Vista / PIX';
+            const simSavings = Math.abs(simCostCard - simCostCash);
+
+            const NavItem = ({ id, icon, label }) => (
+                <button onClick={() => setActiveTab(id)} className={`flex flex-col items-center justify-center w-1/6 py-3 transition-colors ${activeTab === id ? 'text-blue-600 border-t-2 border-blue-600' : 'text-gray-400 border-t-2 border-transparent hover:text-gray-600'}`}>
+                    <i className={`fas ${icon} text-xl mb-1`}></i>
+                    <span className="text-[9px] uppercase font-bold tracking-wider text-center">{label}</span>
+                </button>
+            );
+
+            const EditModal = ({ show, item, type, onSave, onClose, cards }) => {
+                if (!show) return null;
+
+                const [formData, setFormData] = useState(item);
+
+                useEffect(() => {
+                    setFormData(item);
+                }, [item]);
+
+                const handleChange = (e) => {
+                    const { name, value } = e.target;
+                    setFormData(prev => ({ ...prev, [name]: value }));
+                };
+
+                const handleFileChange = (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            setFormData(prev => ({ ...prev, description: reader.result }));
+                        };
+                        reader.readAsDataURL(file);
+                    }
+                };
+
+                const handleSubmit = (e) => {
+                    e.preventDefault();
+                    onSave(formData);
+                };
+
+                const renderFormFields = () => {
+                    switch (type) {
+                        case 'expense':
+                            return (
+                                <div className="space-y-4">
+                                    <h3 className="text-lg font-bold text-blue-800">Editar Compra</h3>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Título</label>
+                                        <input name="title" value={formData.title} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Valor Total (R$)</label>
+                                            <input name="value" type="number" step="0.01" value={formData.value} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Data da Compra</label>
+                                            <input name="date" type="date" value={formData.date} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Nº de Parcelas</label>
+                                        <input name="installments" type="number" min="1" value={formData.installments} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Tags</label>
+                                        <div className="flex flex-wrap gap-2 mt-1 bg-gray-50 p-2 rounded-lg border">
+                                            {tags.map(tag => (
+                                                <label key={tag.id} className="flex items-center text-sm bg-white px-2 py-1 rounded-full shadow-sm cursor-pointer">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        value={tag.id} 
+                                                        checked={formData.tags && formData.tags.includes(tag.id)}
+                                                        onChange={(e) => {
+                                                            const tagId = e.target.value;
+                                                            const isChecked = e.target.checked;
+                                                            const currentTags = formData.tags || [];
+                                                            const newTags = isChecked 
+                                                                ? [...currentTags, tagId] 
+                                                                : currentTags.filter(id => id !== tagId);
+                                                            setFormData(prev => ({ ...prev, tags: newTags }));
+                                                        }}
+                                                        className="mr-1.5 accent-blue-600" 
+                                                    />
+                                                    {tag.name}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Descrição / Anexo</label>
+                                        {formData.description && formData.description.startsWith('data:image/') ? (
+                                            <div className="relative mt-1">
+                                                <img src={formData.description} className="rounded-lg max-h-40 w-auto border p-1" />
+                                                <button 
+                                                    type="button" 
+                                                    onClick={() => setFormData(prev => ({ ...prev, description: null }))}
+                                                    className="absolute top-1 right-1 bg-red-500 text-white rounded-full h-6 w-6 flex items-center justify-center text-xs font-bold shadow-md"
+                                                >
+                                                    &times;
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <textarea 
+                                                name="description" 
+                                                value={formData.description || ''} 
+                                                onChange={handleChange} 
+                                                className="w-full border p-2 rounded-lg bg-gray-50 text-sm mt-1" 
+                                                rows="3"
+                                            />
+                                        )}
+                                        <div className="mt-2">
+                                            <label htmlFor="edit-expense-file" className="text-sm text-blue-600 cursor-pointer hover:underline p-1">
+                                                <i className="fas fa-paperclip mr-1"></i>
+                                                {formData.description && formData.description.startsWith('data:image/') ? 'Trocar Imagem' : 'Anexar Imagem'}
+                                            </label>
+                                            <input id="edit-expense-file" type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        case 'subscription':
+                            return (
+                                <div className="space-y-4">
+                                    <h3 className="text-lg font-bold text-purple-800">Editar Assinatura</h3>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Serviço</label>
+                                        <input name="name" value={formData.name} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Descrição</label>
+                                        <input name="description" value={formData.description} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Cartão</label>
+                                            <select name="cardId" value={formData.cardId} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm">
+                                                {cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Valor (R$)</label>
+                                            <input name="value" type="number" step="0.01" value={formData.value} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        case 'recurring':
+                             return (
+                                <div className="space-y-4">
+                                    <h3 className="text-lg font-bold text-teal-800">Editar Gasto Recorrente</h3>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Título</label>
+                                        <input name="title" value={formData.title} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase">Descrição</label>
+                                        <input name="description" value={formData.description} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Recorrência</label>
+                                            <select name="recurrence" value={formData.recurrence} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm">
+                                                <option value="Mensal">Mensal</option><option value="Quinzenal">Quinzenal</option><option value="Semanal">Semanal</option><option value="Anual">Anual</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Valor (R$)</label>
+                                            <input name="value" type="number" step="0.01" value={formData.value} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        </div>
+                                    </div>
+                                    {formData.recurrence === 'Quinzenal' && (
+                                        <div className="col-span-2">
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Data de Referência</label>
+                                            <input name="date" type="date" value={formData.date || todayISO} onChange={handleChange} className="w-full border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        default: return null;
+                    }
+                };
+
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4 animate-fade-in">
+                        <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-lg">
+                            <form onSubmit={handleSubmit}>
+                                {renderFormFields()}
+                                <div className="flex justify-end gap-3 mt-6">
+                                    <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg text-sm font-semibold hover:bg-gray-300">Cancelar</button>
+                                    <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Salvar Alterações</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="max-w-md mx-auto bg-gray-50 h-full relative shadow-2xl overflow-hidden flex flex-col border-x border-gray-300">
+                    <header className="bg-blue-700 text-white p-4 shadow-md z-10">
+                        <h1 className="text-xl font-bold text-center"><i className="fas fa-wallet mr-2"></i>Controle Financeiro</h1>
+                    </header>
+
+                    <main className="flex-1 overflow-y-auto p-4 no-scrollbar">
+                        {activeTab === 'resumo' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                                    <h2 className="text-lg font-bold mb-4 text-gray-800">Sua Renda e Limite</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase">Salário Mensal Líquido (R$)</label>
+                                            <input type="number" value={salary} onChange={e => setSalary(Number(e.target.value))} className="w-full border-b-2 border-gray-200 focus:border-blue-500 outline-none py-2 text-lg font-medium" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase flex justify-between">
+                                                <span>Gasto Alvo Mensal</span>
+                                                <span className="text-blue-600">{spendPercent}%</span>
+                                            </label>
+                                            <input type="range" min="10" max="100" value={spendPercent} onChange={e => setSpendPercent(Number(e.target.value))} className="w-full mt-2" />
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section className={`p-5 rounded-xl shadow-md text-white ${availableLimit >= 0 ? 'bg-gradient-to-br from-blue-600 to-blue-800' : 'bg-gradient-to-br from-red-500 to-red-700'}`}>
+                                    <h2 className="text-sm uppercase tracking-wider opacity-80 mb-1">Disponível para Gastar</h2>
+                                    <div className="text-4xl font-bold mb-4">{formatCurrency(availableLimit)}</div>
+                                    
+                                    <div className="space-y-2 text-sm opacity-90 border-t border-white/20 pt-3">
+                                        <div className="flex justify-between">
+                                            <span>Limite Base Definido:</span>
+                                            <span className="font-semibold">{formatCurrency(baseLimit)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-red-100">
+                                            <span>Faturas (Compras):</span>
+                                            <span>- {formatCurrency(totalInvoices - totalSubscriptions)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-red-100">
+                                            <span>Assinaturas:</span>
+                                            <span>- {formatCurrency(totalSubscriptions)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-red-100">
+                                            <span>Despesas Recorrentes:</span>
+                                            <span>- {formatCurrency(totalRecurring)}</span>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section className="bg-white p-4 rounded-xl shadow-sm border border-orange-200 bg-orange-50/30">
+                                    <h2 className="text-md font-bold mb-2 text-orange-800"><i className="fas fa-chart-pie mr-2"></i>Impacto Futuro (Parcelamentos)</h2>
+                                    <p className="text-xs text-gray-600 mb-2">Soma mensal das compras parceladas que afetarão faturas futuras:</p>
+                                    <div className="text-2xl font-bold text-orange-600">{formatCurrency(futureInstallmentsValue)} / mês</div>
+                                    <div className="text-sm font-medium text-orange-500 mt-1">Isso compromete <b>{futureImpactPercent}%</b> do seu limite base.</div>
+                                </section>
+                            </div>
+                        )}
+
+                        {activeTab === 'cartoes' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <form onSubmit={addCard} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                                    <h2 className="text-md font-bold mb-3 text-gray-800">Adicionar Cartão</h2>
+                                    <div className="flex gap-2">
+                                        <input name="name" placeholder="Apelido (ex: Nubank)" required className="flex-1 border border-gray-200 p-2 rounded-lg bg-gray-50 text-sm" />
+                                        <input name="closingDay" type="number" min="1" max="31" placeholder="Dia Fech." required className="w-24 border border-gray-200 p-2 rounded-lg bg-gray-50 text-sm" />
+                                        <button type="submit" className="bg-blue-600 text-white px-4 rounded-lg font-bold shadow-sm hover:bg-blue-700">+</button>
+                                    </div>
+                                </form>
+
+                                {cards.map(card => (
+                                    <div key={card.id} className="bg-white p-4 rounded-xl shadow-md border border-gray-200">
+                                        <div className="flex justify-between items-start mb-3 border-b pb-3">
+                                            <div>
+                                                <h3 className="font-bold text-lg text-gray-800">{card.name}</h3>
+                                                <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                                                    <span>Dia de Fechamento:</span>
+                                                    <input type="number" min="1" max="31" value={card.closingDay} onChange={(e) => setCards(cards.map(c => c.id === card.id ? { ...c, closingDay: e.target.value } : c))} className="border rounded w-12 p-1 text-center bg-gray-50" />
+                                                </div>
+                                            </div>
+                                            <div className="text-right flex flex-col items-end">
+                                                <div className="text-xs text-gray-500 font-semibold uppercase">Fatura Atual</div>
+                                                <div className="font-bold text-red-600 text-lg">{formatCurrency(getCardInvoice(card.id))}</div>
+                                                <button onClick={() => removeCardAndDeps(card.id)} className="text-xs text-gray-400 hover:text-red-500 mt-2"><i className="fas fa-trash"></i> Excluir Cartão</button>
+                                            </div>
+                                        </div>
+
+                                        <form onSubmit={(e) => addExpense(e, card.id)} className="flex flex-col gap-2 mb-4 bg-blue-50/50 p-3 rounded-lg border border-blue-200">
+                                            <h4 className="text-xs font-bold text-blue-800 uppercase">Lançar Compra</h4>
+                                            <input name="title" placeholder="O que você comprou?" required className="border-0 bg-white p-2 rounded shadow-sm text-sm w-full" />
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <input name="value" type="number" step="0.01" placeholder="Valor Total" required className="flex-1 border-0 bg-white p-2 rounded shadow-sm text-sm" />
+                                                <input name="date" type="date" defaultValue={todayISO} required className="border-0 bg-white p-2 rounded shadow-sm text-sm" />
+                                            </div>
+                                            <input name="installments" type="number" min="1" defaultValue="1" placeholder="Nº de Parcelas" required className="border-0 bg-white p-2 rounded shadow-sm text-sm w-full" />
+                                            
+                                            {tags.length > 0 && (
+                                                <div className="bg-white p-3 rounded shadow-sm mt-2">
+                                                    <p className="text-xs font-bold text-gray-500 mb-2">Tags</p>
+                                                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                                        {tags.map(tag => (
+                                                            <label key={tag.id} className="flex items-center text-sm cursor-pointer">
+                                                                <input type="checkbox" name="tags" value={tag.id} className="mr-1.5 h-4 w-4 accent-blue-600" />
+                                                                {tag.name}
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {!expenseImage[card.id] && (
+                                                <textarea name="description" placeholder="Descrição (opcional)" className="border-0 bg-white p-2 rounded shadow-sm text-sm w-full" rows="2"></textarea>
+                                            )}
+
+                                            {expenseImage[card.id] && (
+                                                <div className="relative my-2">
+                                                    <img src={expenseImage[card.id]} className="rounded-lg max-h-40 w-auto mx-auto border p-1 bg-white" />
+                                                    <button 
+                                                        type="button" 
+                                                        onClick={() => {
+                                                            const newImages = {...expenseImage};
+                                                            delete newImages[card.id];
+                                                            setExpenseImage(newImages);
+                                                            document.getElementById(`file-input-${card.id}`).value = "";
+                                                        }}
+                                                        className="absolute top-1 right-1 bg-red-500 text-white rounded-full h-6 w-6 flex items-center justify-center text-xs font-bold shadow-md"
+                                                    >&times;</button>
+                                                </div>
+                                            )}
+
+                                            <label htmlFor={`file-input-${card.id}`} className="text-center text-sm text-blue-600 cursor-pointer hover:underline p-2 bg-blue-100/50 rounded-lg mt-1">
+                                                <i className="fas fa-paperclip mr-2"></i>{expenseImage[card.id] ? 'Trocar Imagem' : 'Anexar Imagem'}
+                                            </label>
+                                            <input id={`file-input-${card.id}`} name="image" type="file" accept="image/*" onChange={(e) => handleExpenseFile(e, card.id)} className="hidden" />
+
+                                            <button type="submit" className="bg-blue-600 text-white p-2 rounded shadow-sm text-sm font-bold mt-1">Adicionar na Fatura</button>
+                                        </form>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {activeTab === 'faturas' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 relative">
+                                    <h2 className="text-lg font-bold text-gray-800"><i className="fas fa-file-invoice-dollar mr-2"></i>Faturas Detalhadas</h2>
+                                    <p className="text-xs text-gray-500 mt-1">Veja o detalhe de todas as faturas futuras, agrupadas por cartão.</p>
+                                    
+                                    <button onClick={() => setFilterPanelOpen(!isFilterPanelOpen)} className="absolute top-4 right-4 bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded-lg text-sm font-semibold">
+                                        <i className="fas fa-filter mr-1"></i> Filtro
+                                    </button>
+
+                                    {isFilterPanelOpen && (
+                                        <div className="absolute top-full right-0 mt-2 w-64 bg-white border rounded-lg shadow-xl z-20 p-4">
+                                            <h4 className="font-bold mb-2">Filtrar por Tags</h4>
+                                            <div className="space-y-2 max-h-60 overflow-y-auto">
+                                                {tags.map(tag => (
+                                                    <label key={tag.id} className="flex items-center cursor-pointer p-1 hover:bg-gray-100 rounded">
+                                                        <input 
+                                                            type="checkbox"
+                                                            checked={activeFilterTags.includes(tag.id)}
+                                                            onChange={(e) => {
+                                                                const tagId = tag.id;
+                                                                if (e.target.checked) {
+                                                                    setActiveFilterTags([...activeFilterTags, tagId]);
+                                                                } else {
+                                                                    setActiveFilterTags(activeFilterTags.filter(id => id !== tagId));
+                                                                }
+                                                            }}
+                                                            className="mr-2 h-4 w-4 accent-blue-600"
+                                                        />
+                                                        {tag.name}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                            {tags.length === 0 && <p className="text-xs text-gray-400">Nenhuma tag criada.</p>}
+                                            {activeFilterTags.length > 0 && (
+                                                <button onClick={() => setActiveFilterTags([])} className="w-full text-center mt-4 bg-red-500 text-white text-xs py-1.5 rounded-md hover:bg-red-600 font-semibold">
+                                                    Limpar Filtros
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </section>
+
+                                {activeFilterTags.length > 0 && (
+                                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center flex-wrap gap-2">
+                                        <span className="text-xs font-bold text-blue-800">Filtros Ativos:</span>
+                                        {activeFilterTags.map(tagId => {
+                                            const tag = tags.find(t => t.id === tagId);
+                                            if (!tag) return null;
+                                            return (
+                                                <span key={tagId} className="flex items-center bg-blue-500 text-white text-xs font-semibold pl-2.5 pr-1.5 py-1 rounded-full">
+                                                    {tag.name}
+                                                    <button onClick={() => setActiveFilterTags(activeFilterTags.filter(id => id !== tagId))} className="ml-2 text-blue-200 hover:text-white text-md leading-none">&times;</button>
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {cards.length > 0 ? cards.map(card => (
+                                    <details key={card.id} className="bg-white rounded-xl shadow-md border border-gray-200">
+                                        <summary className="p-4 font-bold text-lg text-gray-800 cursor-pointer list-none flex justify-between items-center">
+                                            <span>{card.name}</span>
+                                            <i className="fas fa-chevron-down text-sm text-gray-400"></i>
+                                        </summary>
+                                        <div className="px-4 pb-4 border-t">
+                                            {(
+                                                () => {
+                                                    const closingDay = Number(card.closingDay);
+                                                    const invoices = {};
+
+                                                    let relevantExpenses = expenses.filter(e => e.cardId === card.id && e.date);
+
+                                                    if (activeFilterTags.length > 0) {
+                                                        relevantExpenses = relevantExpenses.filter(exp => 
+                                                            exp.tags && exp.tags.some(tagId => activeFilterTags.includes(tagId))
+                                                        );
+                                                    }
+
+                                                    relevantExpenses.forEach(exp => {
+                                                        const purchaseDate = new Date(exp.date + 'T00:00:00');
+                                                        const installments = Number(exp.installments);
+                                                        const monthlyValue = Number(exp.value) / installments;
+
+                                                        const firstInvoiceDate = new Date(purchaseDate);
+                                                        if (purchaseDate.getDate() >= closingDay) {
+                                                            firstInvoiceDate.setMonth(firstInvoiceDate.getMonth() + 1);
+                                                        }
+
+                                                        for (let i = 0; i < installments; i++) {
+                                                            const currentInstallmentDate = new Date(firstInvoiceDate);
+                                                            currentInstallmentDate.setMonth(firstInvoiceDate.getMonth() + i);
+
+                                                            const year = currentInstallmentDate.getFullYear();
+                                                            const month = currentInstallmentDate.getMonth();
+                                                            const key = `${year}-${String(month).padStart(2, '0')}`;
+
+                                                            if (!invoices[key]) {
+                                                                invoices[key] = { total: 0, items: [] };
+                                                            }
+
+                                                            invoices[key].total += monthlyValue;
+                                                            invoices[key].items.push({ ...exp, installmentNumber: i + 1, installmentValue: monthlyValue });
+                                                        }
+                                                    });
+
+                                                    const sortedInvoiceKeys = Object.keys(invoices).sort((a, b) => a.localeCompare(b));
+
+                                                    if (sortedInvoiceKeys.length === 0) {
+                                                        return <div className="text-center text-xs text-gray-400 py-4">Nenhum lançamento para este cartão.</div>;
+                                                    }
+
+                                                    return (
+                                                        <div className="space-y-3 mt-4">
+                                                            {sortedInvoiceKeys.map(invoiceKey => {
+                                                                const [year, month] = invoiceKey.split('-');
+                                                                const invoiceData = invoices[invoiceKey];
+                                                                const monthName = new Date(parseInt(year), parseInt(month), 1).toLocaleString('pt-BR', { month: 'long' });
+
+                                                                return (
+                                                                    <details key={invoiceKey} className="bg-gray-50 rounded-lg border border-gray-200">
+                                                                        <summary className="p-3 font-semibold text-gray-700 cursor-pointer flex justify-between items-center list-none">
+                                                                            <span className="capitalize">{`${monthName} ${year}`}</span>
+                                                                            <span className="font-bold text-red-500">{formatCurrency(invoiceData.total)}</span>
+                                                                        </summary>
+                                                                        <div className="p-3 border-t space-y-2 bg-white">
+                                                                            {invoiceData.items.sort((a,b) => a.title.localeCompare(b.title)).map(item => (
+                                                                                <div key={`${item.id}-${item.installmentNumber}`} className="flex justify-between items-center text-sm border-l-4 border-blue-400 pl-3 py-1">
+                                                                                    <div>
+                                                                                        <div className="font-medium text-gray-800">{item.title}</div>
+                                                                                        {item.tags && item.tags.length > 0 && (
+                                                                                            <div className="flex flex-wrap gap-1 mt-1.5">
+                                                                                                {item.tags.map(tagId => {
+                                                                                                    const tag = tags.find(t => t.id === tagId);
+                                                                                                    return tag ? <span key={tagId} className="text-[10px] bg-gray-200 text-gray-700 font-medium px-2 py-0.5 rounded-full">{tag.name}</span> : null;
+                                                                                                })}
+                                                                                            </div>
+                                                                                        )}
+                                                                                        <div className="text-xs text-gray-500 mt-1.5 mb-1">
+                                                                                            {item.installments > 1 ? `Parcela ${item.installmentNumber} de ${item.installments}` : `Pagamento único`}
+                                                                                        </div>
+                                                                                        
+                                                                                        {item.description && (
+                                                                                            <details className="mt-1">
+                                                                                                <summary className="text-xs text-gray-500 cursor-pointer hover:underline list-none p-0">
+                                                                                                    <span className="flex items-center"><i className="fas fa-info-circle mr-1"></i> Ver Detalhes</span>
+                                                                                                </summary>
+                                                                                                <div className="mt-2 p-2 bg-gray-100 rounded-lg border max-w-xs">
+                                                                                                    {item.description.startsWith('data:image/') ? (
+                                                                                                        <a href={item.description} target="_blank" rel="noopener noreferrer" title="Clique para ver a imagem completa">
+                                                                                                            <img src={item.description} alt="Anexo da compra" className="max-w-full h-auto rounded-md shadow-sm" />
+                                                                                                        </a>
+                                                                                                    ) : (
+                                                                                                        <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{item.description}</p>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                            </details>
+                                                                                        )}
+                                                                                    </div>
+                                                                                    <div className="flex items-center gap-4">
+                                                                                        <span className="font-bold text-gray-700">{formatCurrency(item.installmentValue)}</span>
+                                                                                        <button onClick={() => setEditModal({ isOpen: true, item: expenses.find(e => e.id === item.id), type: 'expense' })} className="text-gray-300 hover:text-blue-500 text-xs"><i className="fas fa-pencil-alt"></i></button>
+                                                                                        <button onClick={() => removeItem(setExpenses, expenses, item.id)} className="text-gray-300 hover:text-red-500"><i className="fas fa-times"></i></button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    </details>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    );
+                                                }
+                                            )()}
+                                        </div>
+                                    </details>
+                                )) : (
+                                    <div className="text-center text-gray-500 mt-8">
+                                        <i className="fas fa-credit-card text-4xl text-gray-300 mb-4"></i>
+                                        <p className="font-semibold">Nenhum cartão cadastrado</p>
+                                        <p className="text-sm">Adicione um cartão na aba "Cartões" para ver suas faturas.</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'configuracoes' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                                    <h2 className="text-lg font-bold text-gray-800"><i className="fas fa-tags mr-2"></i>Gerenciar Tags</h2>
+                                    <p className="text-xs text-gray-500 mt-1">Crie e gerencie tags para categorizar suas compras.</p>
+                                </section>
+
+                                <section className="bg-white p-4 rounded-xl shadow-sm">
+                                    <h3 className="text-md font-bold mb-3 text-gray-800">Adicionar Nova Tag</h3>
+                                    <form onSubmit={addTag} className="flex gap-2 mb-6">
+                                        <input name="name" placeholder="Ex: Lazer, Alimentação, Viagem..." required className="flex-1 border border-gray-200 p-2 rounded-lg bg-gray-50 text-sm" />
+                                        <button type="submit" className="bg-blue-600 text-white px-4 rounded-lg font-bold shadow-sm hover:bg-blue-700">Adicionar</button>
+                                    </form>
+                                    <h3 className="text-md font-bold mb-3 text-gray-800">Tags Existentes</h3>
+                                    <div className="space-y-2">
+                                        {tags.sort((a, b) => a.name.localeCompare(b.name)).map(tag => (
+                                            <div key={tag.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                                {editingTag.id === tag.id ? (
+                                                    <form onSubmit={(e) => { e.preventDefault(); handleUpdateTag(); }} className="flex-1 flex items-center gap-3">
+                                                        <input 
+                                                            value={editingTag.name}
+                                                            onChange={(e) => setEditingTag({ ...editingTag, name: e.target.value })}
+                                                            className="flex-1 border border-gray-300 p-1.5 rounded-lg bg-white text-sm"
+                                                            autoFocus
+                                                        />
+                                                        <button type="submit" className="text-green-500 hover:text-green-700"><i className="fas fa-check"></i></button>
+                                                        <button type="button" onClick={() => setEditingTag({ id: null, name: '' })} className="text-red-500 hover:text-red-700"><i className="fas fa-times"></i></button>
+                                                    </form>
+                                                ) : (
+                                                    <>
+                                                        <span className="font-medium text-gray-700">{tag.name}</span>
+                                                        <div className="flex items-center gap-4">
+                                                            <button onClick={() => setEditingTag({ id: tag.id, name: tag.name })} className="text-gray-400 hover:text-blue-500 text-xs"><i className="fas fa-pencil-alt"></i></button>
+                                                            <button onClick={() => removeTag(tag.id)} className="text-gray-400 hover:text-red-500"><i className="fas fa-trash"></i></button>
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        ))}
+                                        {tags.length === 0 && <p className="text-center text-sm text-gray-400 py-4">Nenhuma tag criada.</p>}
+                                    </div>
+                                </section>
+                            </div>
+                        )}
+
+                        {activeTab === 'fixos' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                                    <h2 className="text-md font-bold mb-3 text-purple-800"><i className="fas fa-crown mr-2"></i>Assinaturas (No Cartão)</h2>
+                                    <form onSubmit={addSubscription} className="flex flex-col gap-2 mb-4">
+                                        <input name="name" placeholder="Serviço (ex: Netflix)" required className="border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        <input name="desc" placeholder="Descrição do plano" className="border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        <div className="flex gap-2">
+                                            <select name="cardId" required className="flex-1 border p-2 rounded-lg bg-gray-50 text-sm">
+                                                <option value="">Qual cartão?</option>
+                                                {cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                            </select>
+                                            <input name="value" type="number" step="0.01" placeholder="R$ Valor" required className="w-28 border p-2 rounded-lg bg-gray-50 text-sm" />
+                                        </div>
+                                        <button type="submit" className="bg-purple-600 text-white p-2 rounded-lg text-sm font-bold mt-1">Adicionar Assinatura</button>
+                                    </form>
+                                    <div className="space-y-2">
+                                        {subscriptions.map(sub => (
+                                            <div key={sub.id} className="flex justify-between items-center text-sm bg-purple-50 p-3 rounded-lg border border-purple-100">
+                                                <div>
+                                                    <div className="font-bold text-purple-900">{sub.name}</div>
+                                                    <div className="text-xs text-purple-600">{cards.find(c=>c.id===sub.cardId)?.name} {sub.description ? `- ${sub.description}` : ''}</div>
+                                                </div>
+                                                <div className="flex items-center gap-4">
+                                                    <span className="font-bold text-purple-900">{formatCurrency(sub.value)}</span>
+                                                    <button onClick={() => setEditModal({ isOpen: true, item: sub, type: 'subscription' })} className="text-purple-300 hover:text-blue-500 text-xs"><i className="fas fa-pencil-alt"></i></button>
+                                                    <button onClick={() => removeItem(setSubscriptions, subscriptions, sub.id)} className="text-purple-300 hover:text-red-500"><i className="fas fa-times"></i></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </section>
+
+                                <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                                    <h2 className="text-md font-bold mb-3 text-teal-800"><i className="fas fa-home mr-2"></i>Gastos Recorrentes</h2>
+                                    <p className="text-xs text-gray-500 mb-3">Gastos não atrelados a cartões (Aluguel, Luz, etc)</p>
+                                    <form onSubmit={addRecurring} className="flex flex-col gap-2 mb-4" >
+                                        <input name="title" placeholder="Título (ex: Aluguel)" required className="border p-2 rounded-lg bg-gray-50 text-sm" value={newRecurringData.title} onChange={handleNewRecurringChange} />
+                                        <input name="description" placeholder="Descrição" className="border p-2 rounded-lg bg-gray-50 text-sm" value={newRecurringData.description} onChange={handleNewRecurringChange} />
+                                        <div className="flex gap-2">
+                                            <select name="recurrence" className="flex-1 border p-2 rounded-lg bg-gray-50 text-sm" value={newRecurringData.recurrence} onChange={handleNewRecurringChange}>
+                                                <option value="Mensal">Mensal</option>
+                                                <option value="Quinzenal">Quinzenal</option>
+                                                <option value="Semanal">Semanal</option>
+                                                <option value="Anual">Anual</option>
+                                            </select>
+                                            <input name="value" type="number" step="0.01" placeholder="R$ Valor" required className="w-28 border p-2 rounded-lg bg-gray-50 text-sm" value={newRecurringData.value} onChange={handleNewRecurringChange} />
+                                        </div>
+                                        {newRecurringData.recurrence === 'Quinzenal' && (
+                                            <div className="mt-1">
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase">Data de Referência (1ª cobrança)</label>
+                                                <input name="date" type="date" className="w-full border p-2 rounded-lg bg-gray-50 text-sm" value={newRecurringData.date} onChange={handleNewRecurringChange} />
+                                            </div>
+                                        )}
+                                        <button type="submit" className="bg-teal-600 text-white p-2 rounded-lg text-sm font-bold mt-1">Adicionar Gasto Fixo</button>
+                                    </form>
+                                    <div className="space-y-2">
+                                        {recurring.map(rec => (
+                                            <div key={rec.id} className="flex justify-between items-center text-sm bg-teal-50 p-3 rounded-lg border border-teal-100">
+                                                <div>
+                                                    <div className="font-bold text-teal-900">{rec.title} <span className="text-xs font-normal opacity-70">({rec.recurrence})</span></div>
+                                                    <div className="text-xs text-teal-700">{rec.description}</div>
+                                                </div>
+                                                <div className="flex items-center gap-4">
+                                                    <span className="font-bold text-teal-900">{formatCurrency(rec.value)}</span>
+                                                    <button onClick={() => setEditModal({ isOpen: true, item: rec, type: 'recurring' })} className="text-teal-300 hover:text-blue-500 text-xs"><i className="fas fa-pencil-alt"></i></button>
+                                                    <button onClick={() => removeItem(setRecurring, recurring, rec.id)} className="text-teal-300 hover:text-red-500"><i className="fas fa-times"></i></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </section>
+                            </div>
+                        )}
+
+                        {activeTab === 'simulador' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <section className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                                    <h2 className="text-lg font-bold mb-4 text-indigo-800"><i className="fas fa-balance-scale mr-2"></i>Cartão vs PIX</h2>
+                                    <p className="text-xs text-gray-500 mb-4">Descubra qual a forma de pagamento que economiza mais dinheiro para você.</p>
+                                    
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-600 uppercase">Valor da Compra (R$)</label>
+                                            <input type="number" name="price" value={sim.price} onChange={handleSimChange} className="w-full border-b-2 border-indigo-200 p-2 text-lg font-bold bg-indigo-50/30 outline-none focus:border-indigo-600" />
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase">Quantos pontos por real?</label>
+                                                <input type="number" step="0.1" name="pointsPerReal" value={sim.pointsPerReal} onChange={handleSimChange} className="w-full border p-2 rounded text-sm bg-gray-50" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase">Valor do Ponto (R$)</label>
+                                                <input type="number" step="0.001" name="cardPointValue" value={sim.cardPointValue} onChange={handleSimChange} className="w-full border p-2 rounded text-sm bg-gray-50" />
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-sm font-medium text-gray-700">Total de Pontos Gerados:</span>
+                                                <span className="text-lg font-bold text-indigo-600">
+                                                    { Math.floor(simCalculatedCardPoints).toLocaleString('pt-BR') }
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 mt-2 bg-gray-50 p-2 rounded border">
+                                            <input type="checkbox" id="hasAlt" name="hasAltPlatform" checked={sim.hasAltPlatform} onChange={handleSimChange} className="w-4 h-4 accent-indigo-600" />
+                                            <label htmlFor="hasAlt" className="text-sm font-medium text-gray-700">Pontos em plataforma parceira?</label>
+                                        </div>
+
+                                        {sim.hasAltPlatform && (
+                                            <div className="grid grid-cols-2 gap-3 bg-indigo-50 p-3 rounded-lg border border-indigo-100">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-indigo-800 uppercase">Pontos Parceiro</label>
+                                                    <input type="number" name="altPoints" value={sim.altPoints} onChange={handleSimChange} className="w-full border-0 p-2 rounded text-sm shadow-sm" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-indigo-800 uppercase">Valor (R$)</label>
+                                                    <input type="number" step="0.001" name="altPointValue" value={sim.altPointValue} onChange={handleSimChange} className="w-full border-0 p-2 rounded text-sm shadow-sm" />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="border-t pt-4 border-gray-100">
+                                            <label className="block text-xs font-bold text-gray-600 uppercase">Desconto à vista / PIX (%)</label>
+                                            <input type="number" name="discountPercent" value={sim.discountPercent} onChange={handleSimChange} className="w-full border p-2 rounded text-sm bg-gray-50 mt-1" />
+                                        </div>
+
+                                        <div className="border-t pt-4 border-gray-100">
+                                            <h3 className="text-xs font-bold text-gray-700 uppercase mb-3"><i className="fas fa-piggy-bank mr-1"></i>Onde seu dinheiro está investido?</h3>
+                                            <div className="grid grid-cols-2 gap-3 mb-3">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-gray-500 uppercase">Aplicação</label>
+                                                    <input type="text" name="investType" value={sim.investType} onChange={handleSimChange} placeholder="ex: CDI" className="w-full border p-2 rounded text-sm bg-gray-50" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-gray-500 uppercase">Valor (R$)</label>
+                                                    <input type="number" name="investAmount" value={sim.investAmount} onChange={handleSimChange} className="w-full border p-2 rounded text-sm bg-gray-50" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase">Rendimento Mensal (%)</label>
+                                                <input type="number" step="0.01" name="investYieldRate" value={sim.investYieldRate} onChange={handleSimChange} className="w-full border p-2 rounded text-sm bg-gray-50" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section className="bg-indigo-700 text-white p-6 rounded-xl shadow-lg">
+                                    <h3 className="text-center text-xs font-bold uppercase tracking-wider opacity-90 mb-2">A Opção Mais Vantajosa é:</h3>
+                                    <div className="text-center text-3xl font-black mb-6">{simBestOption}</div>
+                                    
+                                    <div className="space-y-3 text-sm bg-indigo-800/50 p-4 rounded-lg border border-indigo-500/30">
+                                        <div className="flex justify-between items-center border-b border-indigo-500/50 pb-2">
+                                            <span className="opacity-90">Custo Real no Cartão:</span>
+                                            <span className="font-bold text-lg">{formatCurrency(simCostCard)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center pt-1">
+                                            <span className="opacity-90">Custo Real à Vista:</span>
+                                            <span className="font-bold text-lg">{formatCurrency(simCostCash)}</span>
+                                        </div>
+                                        <div className="text-[10px] text-indigo-300 leading-tight mt-2 text-center">
+                                            *Custo à vista inclui o valor pago com desconto + o rendimento que esse dinheiro deixará de gerar no seu {sim.investType} neste mês.
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="text-center mt-5 text-indigo-100 text-sm bg-white/10 p-2 rounded">
+                                        Você economiza <span className="font-bold text-white text-base">{formatCurrency(simSavings)}</span> escolhendo essa opção.
+                                    </div>
+                                </section>
+                            </div>
+                        )}
+                    </main>
+
+                    <nav className="bg-white border-t border-gray-200 flex justify-around shadow-[0_-5px_15px_rgba(0,0,0,0.05)] w-full pb-safe">
+                        <NavItem id="resumo" icon="fa-chart-pie" label="Resumo" />
+                        <NavItem id="cartoes" icon="fa-credit-card" label="Cartões" />
+                        <NavItem id="faturas" icon="fa-file-invoice-dollar" label="Faturas" />
+                        <NavItem id="fixos" icon="fa-repeat" label="Fixos" />
+                        <NavItem id="configuracoes" icon="fa-cog" label="Configurações" />
+                        <NavItem id="simulador" icon="fa-calculator" label="Simulador" />
+                    </nav>
+
+                    <EditModal 
+                        show={editModal.isOpen}
+                        item={editModal.item}
+                        type={editModal.type}
+                        onSave={handleUpdateItem}
+                        onClose={() => setEditModal({ isOpen: false, item: null, type: null })}
+                        cards={cards}
+                    />
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
