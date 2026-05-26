@@ -250,7 +250,7 @@
             const addRecurring = (e) => {
                 e.preventDefault();
                 const { title, description, recurrence, value, date } = newRecurringData;
-                if(title.value && value.value) {
+                if(title && value) {
                     const newItem = { 
                         id: generateId(), 
                         title: title, 
