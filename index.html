@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    
+
     <!-- Tags para comportamento de App Mobile (PWA-like) -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -20,18 +21,54 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <!-- Babel para compilar JSX no navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- SheetJS para Exportação de Excel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         /* Correção para 100vh em navegadores móveis */
-        .h-real-screen { height: 100vh; height: calc(var(--vh, 1vh) * 100); }
-        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 1rem); }
-        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        details[open] > summary .fa-chevron-down { transform: rotate(180deg); }
-        summary .fa-chevron-down { transition: transform 0.2s ease-in-out; }
+        .h-real-screen {
+            height: 100vh;
+            height: calc(var(--vh, 1vh) * 100);
+        }
+
+        .pb-safe {
+            padding-bottom: env(safe-area-inset-bottom, 1rem);
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        details[open]>summary .fa-chevron-down {
+            transform: rotate(180deg);
+        }
+
+        summary .fa-chevron-down {
+            transition: transform 0.2s ease-in-out;
+        }
     </style>
 </head>
+
 <body class="bg-gray-200 font-sans antialiased text-gray-900 overflow-hidden h-real-screen">
     <div id="root" class="h-full"></div>
 
@@ -81,11 +118,11 @@
 
             // Estado do Modal de Edição
             const [editModal, setEditModal] = useState({ isOpen: false, item: null, type: null });
-            
+
             // Estados Persistidos
             const [salary, setSalary] = useLocalStorage('salary', 5000);
             const [spendPercent, setSpendPercent] = useLocalStorage('spendPercent', 50);
-            
+
             const [cards, setCards] = useLocalStorage('cards', []);
             const [expenses, setExpenses] = useLocalStorage('expenses', []);
             const [subscriptions, setSubscriptions] = useLocalStorage('subscriptions', []);
@@ -111,6 +148,60 @@
             const [sim, setSim] = useState({ price: 1500, discountPercent: 10, pointsPerReal: 2.2, cardPointValue: 0.03, hasAltPlatform: false, altPoints: 50, altPointValue: 0.02, investType: 'CDI', investAmount: 10000, investYieldRate: 0.8 });
 
             // Estado para novos itens
+            const exportToExcel = (cardName, month, year, items) => {
+                const data = items.map(item => {
+                    const formattedDate = item.date ? `${item.date.split('-')[2]}/${item.date.split('-')[1]}/${item.date.split('-')[0]}` : '';
+                    const value = item.installmentValue !== undefined ? item.installmentValue : item.value;
+                    const installmentText = item.installmentNumber !== undefined
+                        ? `${item.installmentNumber}/${item.installments}`
+                        : (item.isIncome ? 'Entrada' : 'Saída');
+
+                    const itemTags = (item.tags || []).map(tagId => {
+                        const t = tags.find(tag => tag.id === tagId);
+                        return t ? t.name : '';
+                    }).filter(Boolean).join(', ');
+
+                    const reimbursedText = item.isReimbursed ? 'Sim' : 'Não';
+                    const reimbursementVal = item.reimbursementValue || 0;
+                    const descText = (item.description && item.description.startsWith('data:image/'))
+                        ? '[Imagem Anexada]'
+                        : (item.description || '');
+
+                    return {
+                        'Data': formattedDate,
+                        'Título': item.title || '',
+                        'Valor (R$)': value,
+                        'Parcela / Tipo': installmentText,
+                        'Tags': itemTags,
+                        'Reembolsado?': reimbursedText,
+                        'Valor Reembolso (R$)': reimbursementVal,
+                        'Descrição / Observações': descText
+                    };
+                });
+
+                const worksheet = XLSX.utils.json_to_sheet(data);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, 'Fatura');
+
+                if (data.length > 0) {
+                    const colWidths = Object.keys(data[0]).map(key => {
+                        let maxLen = key.length;
+                        data.forEach(row => {
+                            const valStr = String(row[key] || '');
+                            if (valStr.length > maxLen) {
+                                maxLen = valStr.length;
+                            }
+                        });
+                        return { wch: maxLen + 3 };
+                    });
+                    worksheet['!cols'] = colWidths;
+                }
+
+                const cleanCardName = cardName.replace(/[^a-zA-Z0-9]/g, '_');
+                const cleanMonth = month.replace(/[^a-zA-Z0-9]/g, '_');
+                XLSX.writeFile(workbook, `Fatura_${cleanCardName}_${cleanMonth}_${year}.xlsx`);
+            };
+
             const [newRecurringData, setNewRecurringData] = useState({ title: '', description: '', recurrence: 'Mensal', value: '', date: new Date().toISOString().split('T')[0] });
 
             const handleNewRecurringChange = (e) => {
@@ -123,7 +214,7 @@
             // Cálculos Principais
             const baseLimit = salary * (spendPercent / 100);
             const totalSubscriptions = subscriptions.reduce((acc, sub) => acc + Number(sub.value), 0);
-            
+
             const totalRecurring = recurring.reduce((acc, rec) => {
                 const value = Number(rec.value) || 0;
                 if (value === 0) return acc;
@@ -153,7 +244,7 @@
                         return acc + value;
                 }
             }, 0);
-            
+
             const getCardInvoice = (cardId) => {
                 const card = cards.find(c => c.id === cardId);
                 if (!card) return 0;
@@ -171,7 +262,7 @@
                 let invoiceTotal = 0;
 
                 expenses.filter(e => e.cardId === cardId).forEach(exp => {
-                    if (!exp.date) return; 
+                    if (!exp.date) return;
 
                     const purchaseDate = new Date(exp.date + 'T00:00:00');
                     const installments = Number(exp.installments);
@@ -246,7 +337,7 @@
 
             expenses.filter(e => e.cardId === 'pix').forEach(exp => {
                 if (!exp.date) return;
-                
+
                 const txDate = new Date(exp.date + 'T00:00:00');
                 const txInvoiceDate = new Date(txDate);
                 if (txDate.getDate() >= closingDayPixNumber) {
@@ -273,7 +364,7 @@
             // Handlers (Adicionar/Remover)
             const addCard = (e) => {
                 e.preventDefault();
-                if(e.target.name.value && e.target.closingDay.value) {
+                if (e.target.name.value && e.target.closingDay.value) {
                     setCards([...cards, { id: generateId(), name: e.target.name.value, closingDay: e.target.closingDay.value }]);
                     e.target.reset();
                 }
@@ -287,12 +378,12 @@
                     .filter(el => el.name === 'tags' && el.checked)
                     .map(el => el.value);
 
-                if(title.value && value.value && date.value) {
-                    setExpenses([...expenses, { 
-                        id: generateId(), 
-                        cardId, 
-                        title: title.value, 
-                        value: parseFloat(value.value), 
+                if (title.value && value.value && date.value) {
+                    setExpenses([...expenses, {
+                        id: generateId(),
+                        cardId,
+                        title: title.value,
+                        value: parseFloat(value.value),
                         installments: installments ? (parseInt(installments.value) || 1) : 1,
                         date: date.value,
                         description: image || (description && description.value) || null,
@@ -302,9 +393,9 @@
                         isIncome: isIncome ? (isIncome.value === 'true' || isIncome.value === true) : false
                     }]);
                     e.target.reset();
-                    setNewExpenseToggles(prev => ({...prev, [cardId]: false}));
+                    setNewExpenseToggles(prev => ({ ...prev, [cardId]: false }));
                     setExpenseImage(prev => {
-                        const newImages = {...prev};
+                        const newImages = { ...prev };
                         delete newImages[cardId];
                         return newImages;
                     });
@@ -314,7 +405,7 @@
             const addSubscription = (e) => {
                 e.preventDefault();
                 const { name, desc, cardId, value } = e.target;
-                if(name.value && cardId.value && value.value) {
+                if (name.value && cardId.value && value.value) {
                     setSubscriptions([...subscriptions, { id: generateId(), name: name.value, description: desc.value, cardId: cardId.value, value: parseFloat(value.value) }]);
                     e.target.reset();
                 }
@@ -323,13 +414,13 @@
             const addRecurring = (e) => {
                 e.preventDefault();
                 const { title, description, recurrence, value, date } = newRecurringData;
-                if(title && value) {
-                    const newItem = { 
-                        id: generateId(), 
-                        title: title, 
-                        description: description, 
-                        recurrence: recurrence, 
-                        value: parseFloat(value) 
+                if (title && value) {
+                    const newItem = {
+                        id: generateId(),
+                        title: title,
+                        description: description,
+                        recurrence: recurrence,
+                        value: parseFloat(value)
                     };
                     if (recurrence === 'Quinzenal') {
                         newItem.date = date;
@@ -358,7 +449,7 @@
 
             const removeTag = (tagId) => {
                 setTags(tags.filter(t => t.id !== tagId));
-                setExpenses(prevExpenses => 
+                setExpenses(prevExpenses =>
                     prevExpenses.map(exp => ({
                         ...exp,
                         tags: exp.tags ? exp.tags.filter(tId => tId !== tagId) : []
@@ -387,7 +478,7 @@
                     };
                     reader.readAsDataURL(file);
                 } else {
-                    const newImages = {...expenseImage};
+                    const newImages = { ...expenseImage };
                     delete newImages[cardId];
                     setExpenseImage(newImages);
                 }
@@ -421,8 +512,8 @@
                     alert('Por favor, selecione um cartão de destino.');
                     return;
                 }
-                setExpenses(prevExpenses => 
-                    prevExpenses.map(exp => 
+                setExpenses(prevExpenses =>
+                    prevExpenses.map(exp =>
                         selection.ids.includes(exp.id) ? { ...exp, cardId: targetCardId } : exp
                     )
                 );
@@ -470,8 +561,8 @@
 
             const simCalculatedCardPoints = sim.price * sim.pointsPerReal;
             const simCashPrice = sim.price * (1 - sim.discountPercent / 100);
-            const simLostYield = simCashPrice * (sim.investYieldRate / 100); 
-            const simCostCash = simCashPrice + simLostYield; 
+            const simLostYield = simCashPrice * (sim.investYieldRate / 100);
+            const simCostCash = simCashPrice + simLostYield;
             const simTotalAltPoints = sim.hasAltPlatform ? (sim.altPoints * sim.altPointValue) : 0;
             const simCostCard = sim.price - (simCalculatedCardPoints * sim.cardPointValue) - simTotalAltPoints;
 
@@ -573,39 +664,39 @@
                                         <div className="flex flex-wrap gap-2 mt-1 bg-gray-50 p-2 rounded-lg border">
                                             {tags.map(tag => (
                                                 <label key={tag.id} className="flex items-center text-sm bg-white px-2 py-1 rounded-full shadow-sm cursor-pointer">
-                                                    <input 
-                                                        type="checkbox" 
-                                                        value={tag.id} 
+                                                    <input
+                                                        type="checkbox"
+                                                        value={tag.id}
                                                         checked={formData.tags && formData.tags.includes(tag.id)}
                                                         onChange={(e) => {
                                                             const tagId = e.target.value;
                                                             const isChecked = e.target.checked;
                                                             const currentTags = formData.tags || [];
-                                                            const newTags = isChecked 
-                                                                ? [...currentTags, tagId] 
+                                                            const newTags = isChecked
+                                                                ? [...currentTags, tagId]
                                                                 : currentTags.filter(id => id !== tagId);
                                                             setFormData(prev => ({ ...prev, tags: newTags }));
                                                         }}
-                                                        className="mr-1.5 accent-blue-600" 
+                                                        className="mr-1.5 accent-blue-600"
                                                     />
                                                     {tag.name}
                                                 </label>
                                             ))}
                                         </div>
                                     </div>
-                                    
+
                                     {!formData.isIncome && (
                                         <div className="bg-gray-50 p-3 rounded-lg border mt-4">
                                             <div className="flex items-center justify-between">
                                                 <label htmlFor="edit-isReimbursed" className="text-sm font-medium text-gray-700">Compra reembolsada?</label>
                                                 <label className="relative inline-flex items-center cursor-pointer">
-                                                    <input 
-                                                        type="checkbox" 
+                                                    <input
+                                                        type="checkbox"
                                                         id="edit-isReimbursed"
                                                         name="isReimbursed"
-                                                        checked={formData.isReimbursed || false} 
-                                                        onChange={handleChange} 
-                                                        className="sr-only peer" 
+                                                        checked={formData.isReimbursed || false}
+                                                        onChange={handleChange}
+                                                        className="sr-only peer"
                                                     />
                                                     <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-focus:ring-2 peer-focus:ring-blue-300 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                                                 </label>
@@ -624,8 +715,8 @@
                                         {formData.description && formData.description.startsWith('data:image/') ? (
                                             <div className="relative mt-1">
                                                 <img src={formData.description} className="rounded-lg max-h-40 w-auto border p-1" />
-                                                <button 
-                                                    type="button" 
+                                                <button
+                                                    type="button"
                                                     onClick={() => setFormData(prev => ({ ...prev, description: null }))}
                                                     className="absolute top-1 right-1 bg-red-500 text-white rounded-full h-6 w-6 flex items-center justify-center text-xs font-bold shadow-md"
                                                 >
@@ -633,11 +724,11 @@
                                                 </button>
                                             </div>
                                         ) : (
-                                            <textarea 
-                                                name="description" 
-                                                value={formData.description || ''} 
-                                                onChange={handleChange} 
-                                                className="w-full border p-2 rounded-lg bg-gray-50 text-sm mt-1" 
+                                            <textarea
+                                                name="description"
+                                                value={formData.description || ''}
+                                                onChange={handleChange}
+                                                className="w-full border p-2 rounded-lg bg-gray-50 text-sm mt-1"
                                                 rows="3"
                                             />
                                         )}
@@ -678,7 +769,7 @@
                                 </div>
                             );
                         case 'recurring':
-                             return (
+                            return (
                                 <div className="space-y-4">
                                     <h3 className="text-lg font-bold text-teal-800">Editar Gasto Recorrente</h3>
                                     <div>
@@ -715,7 +806,7 @@
 
                 return (
                     <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4 animate-fade-in">
-                        <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-lg">
+                        <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-lg overflow-y-auto" style={{ maxHeight: 'calc(var(--vh, 1vh) * 80)' }}>
                             <form onSubmit={handleSubmit}>
                                 {renderFormFields()}
                                 <div className="flex justify-end gap-3 mt-6">
@@ -757,13 +848,13 @@
                                 <section className={`p-5 rounded-xl shadow-md text-white ${availableLimit >= 0 ? 'bg-gradient-to-br from-blue-600 to-blue-800' : 'bg-gradient-to-br from-red-500 to-red-700'}`}>
                                     <h2 className="text-sm uppercase tracking-wider opacity-80 mb-1">Disponível para Gastar</h2>
                                     <div className="text-4xl font-bold mb-4">{formatCurrency(availableLimit)}</div>
-                                    
+
                                     <div className="space-y-2 text-sm opacity-90 border-t border-white/20 pt-3">
                                         <div className="flex justify-between">
                                             <span>Limite Base Definido:</span>
                                             <span className="font-semibold">{formatCurrency(baseLimit)}</span>
                                         </div>
-                                         <div className="flex justify-between text-red-100">
+                                        <div className="flex justify-between text-red-100">
                                             <span>Faturas (Compras):</span>
                                             <span>- {formatCurrency(totalInvoices - totalSubscriptions)}</span>
                                         </div>
@@ -838,7 +929,7 @@
 
                                     <form onSubmit={(e) => addExpense(e, 'pix')} className="flex flex-col gap-2 mb-4 bg-blue-50/50 p-3 rounded-lg border border-blue-200">
                                         <h4 className="text-xs font-bold text-blue-800 uppercase">Lançar Movimentação</h4>
-                                        
+
                                         <select name="isIncome" className="border-0 bg-white p-2 rounded shadow-sm text-sm w-full font-bold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
                                             <option value="false">📉 Saída (Gasto)</option>
                                             <option value="true">📈 Entrada (Dinheiro)</option>
@@ -850,12 +941,12 @@
                                             <input name="date" type="date" defaultValue={todayISO} required className="border-0 bg-white p-2 rounded shadow-sm text-sm" />
                                         </div>
                                         <input name="installments" type="hidden" value="1" />
-                                        
+
                                         <div className="bg-white p-3 rounded shadow-sm mt-2">
                                             <div className="flex items-center justify-between">
                                                 <label htmlFor="isReimbursed-pix" className="text-sm font-medium text-gray-700">Foi reembolsada?</label>
                                                 <label className="relative inline-flex items-center cursor-pointer">
-                                                    <input type="checkbox" id="isReimbursed-pix" name="isReimbursed" checked={newExpenseToggles['pix'] || false} onChange={() => setNewExpenseToggles(prev => ({...prev, ['pix']: !prev['pix']}))} className="sr-only peer" />
+                                                    <input type="checkbox" id="isReimbursed-pix" name="isReimbursed" checked={newExpenseToggles['pix'] || false} onChange={() => setNewExpenseToggles(prev => ({ ...prev, ['pix']: !prev['pix'] }))} className="sr-only peer" />
                                                     <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-focus:ring-2 peer-focus:ring-blue-300 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                                                 </label>
                                             </div>
@@ -874,7 +965,7 @@
                                         {expenseImage['pix'] && (
                                             <div className="relative my-2">
                                                 <img src={expenseImage['pix']} className="rounded-lg max-h-40 w-auto mx-auto border p-1 bg-white" />
-                                                <button type="button" onClick={() => { const newImages = {...expenseImage}; delete newImages['pix']; setExpenseImage(newImages); document.getElementById(`file-input-pix`).value = ""; }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full h-6 w-6 flex items-center justify-center text-xs font-bold shadow-md">&times;</button>
+                                                <button type="button" onClick={() => { const newImages = { ...expenseImage }; delete newImages['pix']; setExpenseImage(newImages); document.getElementById(`file-input-pix`).value = ""; }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full h-6 w-6 flex items-center justify-center text-xs font-bold shadow-md">&times;</button>
                                             </div>
                                         )}
                                         <label htmlFor={`file-input-pix`} className="text-center text-sm text-blue-600 cursor-pointer hover:underline p-2 bg-blue-100/50 rounded-lg mt-1"><i className="fas fa-paperclip mr-2"></i>{expenseImage['pix'] ? 'Trocar Imagem' : 'Anexar Imagem'}</label>
@@ -908,7 +999,7 @@
                                                 <input name="date" type="date" defaultValue={todayISO} required className="border-0 bg-white p-2 rounded shadow-sm text-sm" />
                                             </div>
                                             <input name="installments" type="number" min="1" defaultValue="1" placeholder="Nº de Parcelas" required className="border-0 bg-white p-2 rounded shadow-sm text-sm w-full" />
-                                            
+
                                             {tags.length > 0 && (
                                                 <div className="bg-white p-3 rounded shadow-sm mt-2">
                                                     <p className="text-xs font-bold text-gray-500 mb-2">Tags</p>
@@ -927,7 +1018,7 @@
                                                 <div className="flex items-center justify-between">
                                                     <label htmlFor={`isReimbursed-${card.id}`} className="text-sm font-medium text-gray-700">Compra reembolsada?</label>
                                                     <label className="relative inline-flex items-center cursor-pointer">
-                                                        <input type="checkbox" id={`isReimbursed-${card.id}`} name="isReimbursed" checked={newExpenseToggles[card.id] || false} onChange={() => setNewExpenseToggles(prev => ({...prev, [card.id]: !prev[card.id]}))} className="sr-only peer" />
+                                                        <input type="checkbox" id={`isReimbursed-${card.id}`} name="isReimbursed" checked={newExpenseToggles[card.id] || false} onChange={() => setNewExpenseToggles(prev => ({ ...prev, [card.id]: !prev[card.id] }))} className="sr-only peer" />
                                                         <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-focus:ring-2 peer-focus:ring-blue-300 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                                                     </label>
                                                 </div>
@@ -947,10 +1038,10 @@
                                             {expenseImage[card.id] && (
                                                 <div className="relative my-2">
                                                     <img src={expenseImage[card.id]} className="rounded-lg max-h-40 w-auto mx-auto border p-1 bg-white" />
-                                                    <button 
-                                                        type="button" 
+                                                    <button
+                                                        type="button"
                                                         onClick={() => {
-                                                            const newImages = {...expenseImage};
+                                                            const newImages = { ...expenseImage };
                                                             delete newImages[card.id];
                                                             setExpenseImage(newImages);
                                                             document.getElementById(`file-input-${card.id}`).value = "";
@@ -977,7 +1068,7 @@
                                 <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 relative">
                                     <h2 className="text-lg font-bold text-gray-800"><i className="fas fa-file-invoice-dollar mr-2"></i>Faturas Detalhadas</h2>
                                     <p className="text-xs text-gray-500 mt-1">Veja o detalhe de todas as faturas futuras, agrupadas por cartão.</p>
-                                    
+
                                     <button onClick={() => setFilterPanelOpen(!isFilterPanelOpen)} className="absolute top-4 right-4 bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded-lg text-sm font-semibold">
                                         <i className="fas fa-filter mr-1"></i> Filtro
                                     </button>
@@ -988,7 +1079,7 @@
                                             <div className="space-y-2 max-h-60 overflow-y-auto">
                                                 {tags.map(tag => (
                                                     <label key={tag.id} className="flex items-center cursor-pointer p-1 hover:bg-gray-100 rounded">
-                                                        <input 
+                                                        <input
                                                             type="checkbox"
                                                             checked={activeFilterTags.includes(tag.id)}
                                                             onChange={(e) => {
@@ -1031,7 +1122,7 @@
                                     </div>
                                 )}
 
-                                <details open className="bg-white rounded-xl shadow-md border border-gray-200">
+                                <details className="bg-white rounded-xl shadow-md border border-gray-200">
                                     <summary className="p-4 font-bold text-lg text-gray-800 cursor-pointer list-none flex justify-between items-center">
                                         <span>{pixLabel}</span>
                                         <i className="fas fa-chevron-down text-sm text-gray-400"></i>
@@ -1042,7 +1133,7 @@
                                             let relevantExpenses = expenses.filter(e => e.cardId === 'pix' && e.date);
 
                                             if (activeFilterTags.length > 0) {
-                                                relevantExpenses = relevantExpenses.filter(exp => 
+                                                relevantExpenses = relevantExpenses.filter(exp =>
                                                     exp.tags && exp.tags.some(tagId => activeFilterTags.includes(tagId))
                                                 );
                                             }
@@ -1050,7 +1141,7 @@
                                             relevantExpenses.forEach(exp => {
                                                 const purchaseDate = new Date(exp.date + 'T00:00:00');
                                                 const invoiceDate = new Date(purchaseDate);
-                                                
+
                                                 if (purchaseDate.getDate() >= closingDayPixNumber) {
                                                     invoiceDate.setMonth(invoiceDate.getMonth() + 1);
                                                 }
@@ -1088,12 +1179,26 @@
                                                             <details key={invoiceKey} open className="bg-gray-50 rounded-lg border border-gray-200">
                                                                 <summary className="p-3 font-semibold text-gray-700 cursor-pointer flex justify-between items-center list-none">
                                                                     <span className="capitalize">{`${monthName} ${year}`}</span>
-                                                                    <span className={`font-bold ${invoiceData.total < 0 ? 'text-green-600' : 'text-red-500'}`}>
-                                                                        {invoiceData.total < 0 ? '+' : ''}{formatCurrency(Math.abs(invoiceData.total))}
-                                                                    </span>
+                                                                    <div className="flex items-center gap-3">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                e.preventDefault();
+                                                                                exportToExcel(pixLabel, monthName, year, invoiceData.items);
+                                                                            }}
+                                                                            className="text-blue-600 hover:text-blue-800 p-1"
+                                                                            title="Exportar para Excel"
+                                                                        >
+                                                                            <i className="fas fa-file-download text-lg"></i>
+                                                                        </button>
+                                                                        <span className={`font-bold ${invoiceData.total < 0 ? 'text-green-600' : 'text-red-500'}`}>
+                                                                            {invoiceData.total < 0 ? '+' : ''}{formatCurrency(Math.abs(invoiceData.total))}
+                                                                        </span>
+                                                                    </div>
                                                                 </summary>
                                                                 <div className="p-3 border-t space-y-2 bg-white">
-                                                                    {invoiceData.items.sort((a,b) => b.date.localeCompare(a.date)).map(item => (
+                                                                    {invoiceData.items.sort((a, b) => a.date.localeCompare(b.date)).map(item => (
                                                                         <div key={item.id} className={`flex justify-between items-start text-sm border-l-4 pl-3 py-2 rounded bg-gray-50/50 ${(item.isIncome === true || String(item.isIncome) === 'true') ? 'border-green-400' : 'border-red-400'}`}>
                                                                             <div>
                                                                                 <div className="font-medium text-gray-800">{item.title}</div>
@@ -1152,7 +1257,7 @@
                                                     let relevantExpenses = expenses.filter(e => e.cardId === card.id && e.date);
 
                                                     if (activeFilterTags.length > 0) {
-                                                        relevantExpenses = relevantExpenses.filter(exp => 
+                                                        relevantExpenses = relevantExpenses.filter(exp =>
                                                             exp.tags && exp.tags.some(tagId => activeFilterTags.includes(tagId))
                                                         );
                                                     }
@@ -1201,12 +1306,26 @@
                                                                     <details key={invoiceKey} className="bg-gray-50 rounded-lg border border-gray-200">
                                                                         <summary className="p-3 font-semibold text-gray-700 cursor-pointer flex justify-between items-center list-none">
                                                                             <span className="capitalize">{`${monthName} ${year}`}</span>
-                                                                            <span className="font-bold text-red-500">{formatCurrency(invoiceData.total)}</span>
+                                                                            <div className="flex items-center gap-3">
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        e.preventDefault();
+                                                                                        exportToExcel(card.name, monthName, year, invoiceData.items);
+                                                                                    }}
+                                                                                    className="text-blue-600 hover:text-blue-800 p-1"
+                                                                                    title="Exportar para Excel"
+                                                                                >
+                                                                                    <i className="fas fa-file-download text-lg"></i>
+                                                                                </button>
+                                                                                <span className="font-bold text-red-500">{formatCurrency(invoiceData.total)}</span>
+                                                                            </div>
                                                                         </summary>
                                                                         <div className="p-3 border-t space-y-2 bg-white">
-                                                                            {invoiceData.items.sort((a,b) => a.title.localeCompare(b.title)).map(item => (
-                                                                                <div 
-                                                                                    key={`${item.id}-${item.installmentNumber}`} 
+                                                                            {invoiceData.items.sort((a, b) => a.date.localeCompare(b.date)).map(item => (
+                                                                                <div
+                                                                                    key={`${item.id}-${item.installmentNumber}`}
                                                                                     className={`flex justify-between items-center text-sm border-l-4 pl-3 py-1 transition-colors ${selection.ids.includes(item.id) ? 'bg-blue-100 border-blue-500' : 'border-blue-400'}`}
                                                                                     onPointerDown={() => handlePointerDown(item.id)}
                                                                                     onPointerUp={() => handlePointerUp(item.id)}
@@ -1225,13 +1344,13 @@
                                                                                         )}
                                                                                         <div className="text-xs text-gray-500 mt-1.5 mb-1">
                                                                                             {item.installments > 1 ? `Parcela ${item.installmentNumber} de ${item.installments}` : `Pagamento único`}
-                                                                                        </div>
+                                                                                            {` • ${item.date.split('-')[2]}/${item.date.split('-')[1]}/${item.date.split('-')[0]}`} </div>
                                                                                         {item.isReimbursed && item.reimbursementValue > 0 && (
                                                                                             <div className="text-xs text-green-700 font-semibold bg-green-100 px-2 py-0.5 rounded-full inline-block">
                                                                                                 Reembolso: {formatCurrency(item.reimbursementValue)}
                                                                                             </div>
                                                                                         )}
-                                                                                        
+
                                                                                         {item.description && (
                                                                                             <details className="mt-1">
                                                                                                 <summary className="text-xs text-gray-500 cursor-pointer hover:underline list-none p-0">
@@ -1295,7 +1414,7 @@
                                             <div key={tag.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
                                                 {editingTag.id === tag.id ? (
                                                     <form onSubmit={(e) => { e.preventDefault(); handleUpdateTag(); }} className="flex-1 flex items-center gap-3">
-                                                        <input 
+                                                        <input
                                                             value={editingTag.name}
                                                             onChange={(e) => setEditingTag({ ...editingTag, name: e.target.value })}
                                                             className="flex-1 border border-gray-300 p-1.5 rounded-lg bg-white text-sm"
@@ -1324,14 +1443,14 @@
                                     <div className="mt-4 space-y-4">
                                         <div>
                                             <label className="block text-xs font-semibold text-gray-500 uppercase">Nome para Movimentações sem Cartão (PIX, etc)</label>
-                                            <input 
+                                            <input
                                                 value={pixLabel}
                                                 onChange={(e) => setPixLabel(e.target.value)}
                                                 className="w-full border p-2 rounded-lg bg-gray-50 text-sm mt-1" />
                                         </div>
                                         <div>
                                             <label className="block text-xs font-semibold text-gray-500 uppercase">Dia de Fechamento do PIX/Dinheiro</label>
-                                            <input 
+                                            <input
                                                 type="number"
                                                 min="1"
                                                 max="31"
@@ -1365,7 +1484,7 @@
                                             <div key={sub.id} className="flex justify-between items-center text-sm bg-purple-50 p-3 rounded-lg border border-purple-100">
                                                 <div>
                                                     <div className="font-bold text-purple-900">{sub.name}</div>
-                                                    <div className="text-xs text-purple-600">{cards.find(c=>c.id===sub.cardId)?.name} {sub.description ? `- ${sub.description}` : ''}</div>
+                                                    <div className="text-xs text-purple-600">{cards.find(c => c.id === sub.cardId)?.name} {sub.description ? `- ${sub.description}` : ''}</div>
                                                 </div>
                                                 <div className="flex items-center gap-4">
                                                     <span className="font-bold text-purple-900">{formatCurrency(sub.value)}</span>
@@ -1424,13 +1543,13 @@
                                 <section className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
                                     <h2 className="text-lg font-bold mb-4 text-indigo-800"><i className="fas fa-balance-scale mr-2"></i>Cartão vs PIX</h2>
                                     <p className="text-xs text-gray-500 mb-4">Descubra qual a forma de pagamento que economiza mais dinheiro para você.</p>
-                                    
+
                                     <div className="space-y-4">
                                         <div>
                                             <label className="block text-xs font-bold text-gray-600 uppercase">Valor da Compra (R$)</label>
                                             <input type="number" name="price" value={sim.price} onChange={handleSimChange} className="w-full border-b-2 border-indigo-200 p-2 text-lg font-bold bg-indigo-50/30 outline-none focus:border-indigo-600" />
                                         </div>
-                                        
+
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
                                                 <label className="block text-[10px] font-bold text-gray-500 uppercase">Quantos pontos por real?</label>
@@ -1446,7 +1565,7 @@
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm font-medium text-gray-700">Total de Pontos Gerados:</span>
                                                 <span className="text-lg font-bold text-indigo-600">
-                                                    { Math.floor(simCalculatedCardPoints).toLocaleString('pt-BR') }
+                                                    {Math.floor(simCalculatedCardPoints).toLocaleString('pt-BR')}
                                                 </span>
                                             </div>
                                         </div>
@@ -1497,7 +1616,7 @@
                                 <section className="bg-indigo-700 text-white p-6 rounded-xl shadow-lg">
                                     <h3 className="text-center text-xs font-bold uppercase tracking-wider opacity-90 mb-2">A Opção Mais Vantajosa é:</h3>
                                     <div className="text-center text-3xl font-black mb-6">{simBestOption}</div>
-                                    
+
                                     <div className="space-y-3 text-sm bg-indigo-800/50 p-4 rounded-lg border border-indigo-500/30">
                                         <div className="flex justify-between items-center border-b border-indigo-500/50 pb-2">
                                             <span className="opacity-90">Custo Real no Cartão:</span>
@@ -1511,7 +1630,7 @@
                                             *Custo à vista inclui o valor pago com desconto + o rendimento que esse dinheiro deixará de gerar no seu {sim.investType} neste mês.
                                         </div>
                                     </div>
-                                    
+
                                     <div className="text-center mt-5 text-indigo-100 text-sm bg-white/10 p-2 rounded">
                                         Você economiza <span className="font-bold text-white text-base">{formatCurrency(simSavings)}</span> escolhendo essa opção.
                                     </div>
@@ -1545,7 +1664,7 @@
                         <NavItem id="simulador" icon="fa-calculator" label="Simulador" />
                     </nav>
 
-                    <EditModal 
+                    <EditModal
                         show={editModal.isOpen}
                         item={editModal.item}
                         type={editModal.type}
@@ -1561,4 +1680,5 @@
         root.render(<App />);
     </script>
 </body>
+
 </html>
