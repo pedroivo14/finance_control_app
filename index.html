@@ -162,7 +162,7 @@
                     }).filter(Boolean).join(', ');
 
                     const reimbursedText = item.isReimbursed ? 'Sim' : 'Não';
-                    const reimbursementVal = item.reimbursementValue || 0;
+                    const reimbursementVal = item.installmentReimbursement !== undefined ? item.installmentReimbursement : (item.reimbursementValue || 0);
                     const descText = (item.description && item.description.startsWith('data:image/'))
                         ? '[Imagem Anexada]'
                         : (item.description || '');
@@ -265,8 +265,10 @@
                     if (!exp.date) return;
 
                     const purchaseDate = new Date(exp.date + 'T00:00:00');
-                    const installments = Number(exp.installments);
-                    const monthlyValue = Number(exp.value) / installments;
+                    const installments = Number(exp.installments) || 1;
+                    const totalReimbursement = exp.isReimbursed ? (Number(exp.reimbursementValue) || 0) : 0;
+                    const monthlyReimbursement = totalReimbursement / installments;
+                    const monthlyValue = (Number(exp.value) / installments) - monthlyReimbursement;
 
                     const firstInvoiceStartDate = new Date(purchaseDate);
                     if (purchaseDate.getDate() >= closingDay) {
@@ -306,7 +308,7 @@
                 const invoiceMonth = currentInvoiceDate.getMonth();
 
                 const purchaseDate = new Date(exp.date + 'T00:00:00');
-                const installments = Number(exp.installments);
+                const installments = Number(exp.installments) || 1;
                 const firstInvoiceStartDate = new Date(purchaseDate);
                 if (purchaseDate.getDate() >= closingDay) {
                     firstInvoiceStartDate.setMonth(firstInvoiceStartDate.getMonth() + 1);
@@ -316,7 +318,7 @@
                     const installmentDate = new Date(firstInvoiceStartDate);
                     installmentDate.setMonth(firstInvoiceStartDate.getMonth() + i);
                     if (installmentDate.getFullYear() === invoiceYear && installmentDate.getMonth() === invoiceMonth) {
-                        return acc + (Number(exp.reimbursementValue) || 0);
+                        return acc + ((Number(exp.reimbursementValue) || 0) / installments);
                     }
                 }
                 return acc;
@@ -354,11 +356,14 @@
                 }
             });
 
-            const availableLimit = baseLimit - totalRecurring - totalInvoices - totalPixExpenses + totalReimbursements + totalPixIncome;
+            const availableLimit = baseLimit - totalRecurring - totalInvoices - totalPixExpenses + totalPixIncome;
 
             const futureInstallmentsValue = expenses
                 .filter(e => e.installments > 1 && e.cardId !== 'pix')
-                .reduce((acc, e) => acc + (Number(e.value) / Number(e.installments)), 0);
+                .reduce((acc, e) => {
+                    const totalReimb = e.isReimbursed ? (Number(e.reimbursementValue) || 0) : 0;
+                    return acc + ((Number(e.value) - totalReimb) / Number(e.installments));
+                }, 0);
             const futureImpactPercent = baseLimit > 0 ? ((futureInstallmentsValue / baseLimit) * 100).toFixed(1) : 0;
 
             // Handlers (Adicionar/Remover)
@@ -1176,7 +1181,7 @@
                                                         const monthName = new Date(parseInt(year), parseInt(month), 1).toLocaleString('pt-BR', { month: 'long' });
 
                                                         return (
-                                                            <details key={invoiceKey} open className="bg-gray-50 rounded-lg border border-gray-200">
+                                                            <details key={invoiceKey} className="bg-gray-50 rounded-lg border border-gray-200">
                                                                 <summary className="p-3 font-semibold text-gray-700 cursor-pointer flex justify-between items-center list-none">
                                                                     <span className="capitalize">{`${monthName} ${year}`}</span>
                                                                     <div className="flex items-center gap-3">
@@ -1264,8 +1269,10 @@
 
                                                     relevantExpenses.forEach(exp => {
                                                         const purchaseDate = new Date(exp.date + 'T00:00:00');
-                                                        const installments = Number(exp.installments);
-                                                        const monthlyValue = Number(exp.value) / installments;
+                                                        const installments = Number(exp.installments) || 1;
+                                                        const totalReimbursement = exp.isReimbursed ? (Number(exp.reimbursementValue) || 0) : 0;
+                                                        const monthlyReimbursement = totalReimbursement / installments;
+                                                        const monthlyValue = (Number(exp.value) / installments) - monthlyReimbursement;
 
                                                         const firstInvoiceDate = new Date(purchaseDate);
                                                         if (purchaseDate.getDate() >= closingDay) {
@@ -1285,7 +1292,7 @@
                                                             }
 
                                                             invoices[key].total += monthlyValue;
-                                                            invoices[key].items.push({ ...exp, installmentNumber: i + 1, installmentValue: monthlyValue });
+                                                            invoices[key].items.push({ ...exp, installmentNumber: i + 1, installmentValue: monthlyValue, installmentReimbursement: monthlyReimbursement });
                                                         }
                                                     });
 
@@ -1347,7 +1354,7 @@
                                                                                             {` • ${item.date.split('-')[2]}/${item.date.split('-')[1]}/${item.date.split('-')[0]}`} </div>
                                                                                         {item.isReimbursed && item.reimbursementValue > 0 && (
                                                                                             <div className="text-xs text-green-700 font-semibold bg-green-100 px-2 py-0.5 rounded-full inline-block">
-                                                                                                Reembolso: {formatCurrency(item.reimbursementValue)}
+                                                                                                Reembolso: {formatCurrency(item.installmentReimbursement)}
                                                                                             </div>
                                                                                         )}
 
