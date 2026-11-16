@@ -343,12 +343,39 @@
 
             const availableLimit = baseLimit - totalRecurring - totalInvoices - totalPixExpenses + totalReimbursements + totalPixIncome;
 
-            const futureInstallmentsValue = expenses
-                .filter(e => e.installments > 1 && e.cardId !== 'pix')
-                .reduce((acc, e) => {
+            const activeInstallments = expenses
+                .filter(e => Number(e.installments) > 1 && e.cardId !== 'pix' && e.date)
+                .map(e => {
+                    const card = cards.find(c => c.id === e.cardId);
+                    const closingDay = card ? Number(card.closingDay) : 31;
+                    const currentInvoiceMonth = getInvoiceMonth(new Date(), closingDay);
+
+                    const purchaseDate = new Date(e.date + 'T00:00:00');
+                    const installments = Number(e.installments) || 1;
+                    const firstInvoiceMonth = getInvoiceMonth(purchaseDate, closingDay);
+
+                    let remainingInstallments = 0;
+                    for (let i = 0; i < installments; i++) {
+                        if (addMonths(firstInvoiceMonth, i) >= currentInvoiceMonth) {
+                            remainingInstallments++;
+                        }
+                    }
+
                     const totalReimb = e.isReimbursed ? (Number(e.reimbursementValue) || 0) : 0;
-                    return acc + ((Number(e.value) - totalReimb) / Number(e.installments));
-                }, 0);
+                    const monthlyNetValue = (Number(e.value) - totalReimb) / installments;
+                    const remainingValue = monthlyNetValue * remainingInstallments;
+
+                    return {
+                        id: e.id,
+                        title: e.title,
+                        remainingInstallments,
+                        remainingValue,
+                        monthlyNetValue
+                    };
+                })
+                .filter(item => item.remainingInstallments > 0);
+
+            const futureInstallmentsValue = activeInstallments.reduce((acc, item) => acc + item.monthlyNetValue, 0);
             const futureImpactPercent = baseLimit > 0 ? ((futureInstallmentsValue / baseLimit) * 100).toFixed(1) : 0;
 
             // Handlers (Adicionar/Remover)
@@ -864,6 +891,21 @@
                                     <p className="text-xs text-gray-600 mb-2">Soma mensal das compras parceladas que afetarão faturas futuras (exceto PIX):</p>
                                     <div className="text-2xl font-bold text-orange-600">{formatCurrency(futureInstallmentsValue)} / mês</div>
                                     <div className="text-sm font-medium text-orange-500 mt-1">Isso compromete <b>{futureImpactPercent}%</b> do seu limite base.</div>
+                                    {activeInstallments.length > 0 && (
+                                        <div className="mt-4 pt-3 border-t border-orange-200/70 space-y-1.5">
+                                            <h3 className="text-xs font-bold text-orange-800 uppercase mb-2">Parcelamentos em andamento:</h3>
+                                            <ul className="space-y-1.5 text-xs text-gray-700">
+                                                {activeInstallments.map(item => (
+                                                    <li key={item.id} className="bg-white/80 px-2.5 py-1.5 rounded border border-orange-100">
+                                                        <span className="font-semibold text-gray-800">{item.title}:</span>{' '}
+                                                        <span className="text-orange-700 font-medium">
+                                                            {formatCurrency(item.remainingValue)} em {item.remainingInstallments} {item.remainingInstallments === 1 ? 'parcela' : 'parcelas'}
+                                                        </span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
                                 </section>
                             </div>
                         )}
