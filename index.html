@@ -101,6 +101,20 @@
         const generateId = () => Math.random().toString(36).substring(2, 9);
         const formatCurrency = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
+        // Data local no formato YYYY-MM-DD (evita o deslocamento de fuso do toISOString)
+        const toLocalISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+        // Mês da fatura (sempre dia 1) em que uma data cai. No dia do fechamento ou depois, vai para a próxima fatura.
+        const getInvoiceMonth = (date, closingDay) => {
+            const offset = date.getDate() >= closingDay ? 1 : 0;
+            return new Date(date.getFullYear(), date.getMonth() + offset, 1);
+        };
+
+        // Soma meses a partir de um mês de fatura sem estourar em dias 29-31
+        const addMonths = (monthDate, i) => new Date(monthDate.getFullYear(), monthDate.getMonth() + i, 1);
+
+        const isSameMonth = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+
         function App() {
             // Navegação
             const [activeTab, setActiveTab] = useState('resumo');
@@ -199,14 +213,14 @@
                 XLSX.writeFile(workbook, `Fatura_${cleanCardName}_${cleanMonth}_${year}.xlsx`);
             };
 
-            const [newRecurringData, setNewRecurringData] = useState({ title: '', description: '', recurrence: 'Mensal', value: '', date: new Date().toISOString().split('T')[0] });
+            const [newRecurringData, setNewRecurringData] = useState({ title: '', description: '', recurrence: 'Mensal', value: '', date: toLocalISO(new Date()) });
 
             const handleNewRecurringChange = (e) => {
                 const { name, value } = e.target;
                 setNewRecurringData(prev => ({ ...prev, [name]: value }));
             };
 
-            const todayISO = new Date().toISOString().split('T')[0];
+            const todayISO = toLocalISO(new Date());
 
             // Cálculos Principais
             const baseLimit = salary * (spendPercent / 100);
@@ -246,15 +260,8 @@
                 const card = cards.find(c => c.id === cardId);
                 if (!card) return 0;
 
-                const today = new Date();
                 const closingDay = Number(card.closingDay);
-
-                const currentInvoiceDate = new Date(today);
-                if (today.getDate() > closingDay) {
-                    currentInvoiceDate.setMonth(currentInvoiceDate.getMonth() + 1);
-                }
-                const invoiceYear = currentInvoiceDate.getFullYear();
-                const invoiceMonth = currentInvoiceDate.getMonth();
+                const currentInvoiceMonth = getInvoiceMonth(new Date(), closingDay);
 
                 let invoiceTotal = 0;
 
@@ -263,20 +270,12 @@
 
                     const purchaseDate = new Date(exp.date + 'T00:00:00');
                     const installments = Number(exp.installments) || 1;
-                    const totalReimbursement = exp.isReimbursed ? (Number(exp.reimbursementValue) || 0) : 0;
-                    const monthlyReimbursement = totalReimbursement / installments;
-                    const monthlyValue = (Number(exp.value) / installments) - monthlyReimbursement;
-
-                    const firstInvoiceStartDate = new Date(purchaseDate);
-                    if (purchaseDate.getDate() >= closingDay) {
-                        firstInvoiceStartDate.setMonth(firstInvoiceStartDate.getMonth() + 1);
-                    }
+                    // A fatura mostra a parcela cheia; o reembolso é abatido apenas no limite disponível
+                    const monthlyValue = Number(exp.value) / installments;
+                    const firstInvoiceMonth = getInvoiceMonth(purchaseDate, closingDay);
 
                     for (let i = 0; i < installments; i++) {
-                        const installmentDate = new Date(firstInvoiceStartDate);
-                        installmentDate.setMonth(firstInvoiceStartDate.getMonth() + i);
-
-                        if (installmentDate.getFullYear() === invoiceYear && installmentDate.getMonth() === invoiceMonth) {
+                        if (isSameMonth(addMonths(firstInvoiceMonth, i), currentInvoiceMonth)) {
                             invoiceTotal += monthlyValue;
                             break;
                         }
@@ -290,31 +289,20 @@
             const totalInvoices = cards.reduce((acc, card) => acc + getCardInvoice(card.id), 0);
 
             const totalReimbursements = expenses.reduce((acc, exp) => {
-                if (!exp.isReimbursed || !exp.cardId || exp.cardId === 'pix' || !(Number(exp.reimbursementValue) > 0)) return acc;
+                if (!exp.isReimbursed || !exp.cardId || exp.cardId === 'pix' || !exp.date || !(Number(exp.reimbursementValue) > 0)) return acc;
 
                 const card = cards.find(c => c.id === exp.cardId);
                 if (!card) return acc;
 
-                const today = new Date();
                 const closingDay = Number(card.closingDay);
-                const currentInvoiceDate = new Date(today);
-                if (today.getDate() > closingDay) {
-                    currentInvoiceDate.setMonth(currentInvoiceDate.getMonth() + 1);
-                }
-                const invoiceYear = currentInvoiceDate.getFullYear();
-                const invoiceMonth = currentInvoiceDate.getMonth();
+                const currentInvoiceMonth = getInvoiceMonth(new Date(), closingDay);
 
                 const purchaseDate = new Date(exp.date + 'T00:00:00');
                 const installments = Number(exp.installments) || 1;
-                const firstInvoiceStartDate = new Date(purchaseDate);
-                if (purchaseDate.getDate() >= closingDay) {
-                    firstInvoiceStartDate.setMonth(firstInvoiceStartDate.getMonth() + 1);
-                }
+                const firstInvoiceMonth = getInvoiceMonth(purchaseDate, closingDay);
 
                 for (let i = 0; i < installments; i++) {
-                    const installmentDate = new Date(firstInvoiceStartDate);
-                    installmentDate.setMonth(firstInvoiceStartDate.getMonth() + i);
-                    if (installmentDate.getFullYear() === invoiceYear && installmentDate.getMonth() === invoiceMonth) {
+                    if (isSameMonth(addMonths(firstInvoiceMonth, i), currentInvoiceMonth)) {
                         return acc + ((Number(exp.reimbursementValue) || 0) / installments);
                     }
                 }
@@ -353,7 +341,7 @@
                 }
             });
 
-            const availableLimit = baseLimit - totalRecurring - totalInvoices - totalPixExpenses + totalPixIncome;
+            const availableLimit = baseLimit - totalRecurring - totalInvoices - totalPixExpenses + totalReimbursements + totalPixIncome;
 
             const futureInstallmentsValue = expenses
                 .filter(e => e.installments > 1 && e.cardId !== 'pix')
@@ -1254,16 +1242,12 @@
                                                         const installments = Number(exp.installments) || 1;
                                                         const totalReimbursement = exp.isReimbursed ? (Number(exp.reimbursementValue) || 0) : 0;
                                                         const monthlyReimbursement = totalReimbursement / installments;
-                                                        const monthlyValue = (Number(exp.value) / installments) - monthlyReimbursement;
-
-                                                        const firstInvoiceDate = new Date(purchaseDate);
-                                                        if (purchaseDate.getDate() >= closingDay) {
-                                                            firstInvoiceDate.setMonth(firstInvoiceDate.getMonth() + 1);
-                                                        }
+                                                        // A fatura mostra a parcela cheia; o reembolso é abatido apenas no limite disponível
+                                                        const monthlyValue = Number(exp.value) / installments;
+                                                        const firstInvoiceMonth = getInvoiceMonth(purchaseDate, closingDay);
 
                                                         for (let i = 0; i < installments; i++) {
-                                                            const currentInstallmentDate = new Date(firstInvoiceDate);
-                                                            currentInstallmentDate.setMonth(firstInvoiceDate.getMonth() + i);
+                                                            const currentInstallmentDate = addMonths(firstInvoiceMonth, i);
 
                                                             const year = currentInstallmentDate.getFullYear();
                                                             const month = currentInstallmentDate.getMonth();
